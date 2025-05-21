@@ -3,20 +3,29 @@ use std::io::Write;
 pub const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
 #[derive(Debug, Clone)]
-pub struct PngImage {
-    //
+pub struct PngRgbaImage {
+    width: usize,
+    height: usize,
+    data: Vec<u8>,
 }
 
-impl PngImage {
+impl PngRgbaImage {
+    pub fn new(width: usize, height: usize, data: Vec<u8>) -> Option<Self> {
+        if (width * height * 4) != data.len() {
+            None
+        } else {
+            Some(Self {
+                width,
+                height,
+                data,
+            })
+        }
+    }
+
     pub fn write_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
         todo!()
     }
 }
-
-#[derive(Debug, Clone)]
-pub struct PngFile {}
-
-impl PngFile {}
 
 #[derive(Debug, Clone)]
 pub struct PngChunk {
