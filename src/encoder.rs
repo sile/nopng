@@ -3,6 +3,17 @@ use std::io::Write;
 pub const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
 #[derive(Debug, Clone)]
+pub struct PngImage {
+    //
+}
+
+impl PngImage {
+    pub fn write_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        todo!()
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct PngFile {}
 
 impl PngFile {}
