@@ -1,5 +1,7 @@
 use std::io::Write;
 
+use crate::chunk::IhdrChunk;
+
 const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
 #[derive(Debug, Clone)]
@@ -25,10 +27,13 @@ impl PngRgbaImage {
     pub fn write_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
         writer.write_all(&PNG_SIGNATURE)?;
 
-        // Create and write IHDR chunk
-        let ihdr_data = self.create_ihdr_data();
-        let ihdr_chunk = self.create_chunk(*b"IHDR", ihdr_data);
-        ihdr_chunk.write_to(writer)?;
+        IhdrChunk {
+            width: self.width,
+            height: self.height,
+            bit_depth: 8,
+            color_type: IhdrChunk::COLOR_TYPE_RGBA,
+        }
+        .write_to(writer)?;
 
         // Create and write IDAT chunk (with compressed image data)
         let idat_data = self.create_idat_data()?;
@@ -40,26 +45,6 @@ impl PngRgbaImage {
         iend_chunk.write_to(writer)?;
 
         Ok(())
-    }
-
-    fn create_ihdr_data(&self) -> Vec<u8> {
-        let mut data = Vec::with_capacity(13);
-        // Width (4 bytes)
-        data.extend_from_slice(&(self.width as u32).to_be_bytes());
-        // Height (4 bytes)
-        data.extend_from_slice(&(self.height as u32).to_be_bytes());
-        // Bit depth (1 byte) - 8 bits per sample
-        data.push(8);
-        // Color type (1 byte) - 6 means RGBA
-        data.push(6);
-        // Compression method (1 byte) - 0 means zlib deflate
-        data.push(0);
-        // Filter method (1 byte) - 0 means adaptive filtering
-        data.push(0);
-        // Interlace method (1 byte) - 0 means no interlacing
-        data.push(0);
-
-        data
     }
 
     fn create_idat_data(&self) -> std::io::Result<Vec<u8>> {
