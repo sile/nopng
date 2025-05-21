@@ -35,3 +35,20 @@ impl IhdrChunk {
         Ok(())
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct IendChunk;
+
+impl IendChunk {
+    const SIZE: u32 = 0;
+
+    pub fn write_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        writer.write_all(&Self::SIZE.to_be_bytes())?;
+
+        let mut writer = CrcWriter::new(writer);
+        writer.write_all(b"IEND")?;
+        writer.finish()?;
+
+        Ok(())
+    }
+}

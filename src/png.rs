@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use crate::chunk::IhdrChunk;
+use crate::chunk::{IendChunk, IhdrChunk};
 
 const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
@@ -40,9 +40,7 @@ impl PngRgbaImage {
         let idat_chunk = self.create_chunk(*b"IDAT", idat_data);
         idat_chunk.write_to(writer)?;
 
-        // Create and write IEND chunk
-        let iend_chunk = self.create_chunk(*b"IEND", vec![]);
-        iend_chunk.write_to(writer)?;
+        IendChunk.write_to(writer)?;
 
         Ok(())
     }
