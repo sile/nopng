@@ -1,2 +1,2 @@
 pub mod deflate;
-pub mod encoder;
+pub mod png;
