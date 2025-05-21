@@ -1,6 +1,6 @@
 use std::io::Write;
 
-pub const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
 #[derive(Debug, Clone)]
 pub struct PngRgbaImage {
@@ -23,7 +23,103 @@ impl PngRgbaImage {
     }
 
     pub fn write_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        // Write PNG signature
+        writer.write_all(&PNG_SIGNATURE)?;
+
+        // Create and write IHDR chunk
+        let ihdr_data = self.create_ihdr_data();
+        let ihdr_chunk = self.create_chunk(*b"IHDR", ihdr_data);
+        ihdr_chunk.write_to(writer)?;
+
+        // Create and write IDAT chunk (with compressed image data)
+        let idat_data = self.create_idat_data()?;
+        let idat_chunk = self.create_chunk(*b"IDAT", idat_data);
+        idat_chunk.write_to(writer)?;
+
+        // Create and write IEND chunk
+        let iend_chunk = self.create_chunk(*b"IEND", vec![]);
+        iend_chunk.write_to(writer)?;
+
+        Ok(())
+    }
+
+    fn create_ihdr_data(&self) -> Vec<u8> {
+        let mut data = Vec::with_capacity(13);
+        // Width (4 bytes)
+        data.extend_from_slice(&(self.width as u32).to_be_bytes());
+        // Height (4 bytes)
+        data.extend_from_slice(&(self.height as u32).to_be_bytes());
+        // Bit depth (1 byte) - 8 bits per sample
+        data.push(8);
+        // Color type (1 byte) - 6 means RGBA
+        data.push(6);
+        // Compression method (1 byte) - 0 means zlib deflate
+        data.push(0);
+        // Filter method (1 byte) - 0 means adaptive filtering
+        data.push(0);
+        // Interlace method (1 byte) - 0 means no interlacing
+        data.push(0);
+
+        data
+    }
+
+    fn create_idat_data(&self) -> std::io::Result<Vec<u8>> {
+        // use flate2::Compression;
+        // use flate2::write::ZlibEncoder;
+        // use std::io::Cursor;
+
+        // // Prepare scanlines with filtering
+        // let mut filtered_data = Vec::with_capacity(self.height * (1 + self.width * 4));
+
+        // // For each scanline, add filter type byte (0 = None) followed by raw pixel data
+        // for y in 0..self.height {
+        //     // Filter type 0 (None)
+        //     filtered_data.push(0);
+
+        //     // Add the raw pixel data for this scanline
+        //     let start = y * self.width * 4;
+        //     let end = start + self.width * 4;
+        //     filtered_data.extend_from_slice(&self.data[start..end]);
+        // }
+
+        // // Compress the filtered scanlines using zlib
+        // let mut compressed_data = Vec::new();
+        // {
+        //     let mut encoder =
+        //         ZlibEncoder::new(Cursor::new(&mut compressed_data), Compression::default());
+        //     encoder.write_all(&filtered_data)?;
+        //     encoder.finish()?;
+        // }
+
+        // Ok(compressed_data)
         todo!()
+    }
+
+    fn create_chunk(&self, chunk_type: [u8; 4], data: Vec<u8>) -> PngChunk {
+        let size = data.len() as u32;
+
+        // Calculate CRC
+        let mut crc = 0xFFFFFFFFu32;
+
+        // Update CRC with chunk type
+        for &byte in &chunk_type {
+            crc = update_crc(crc, byte);
+        }
+
+        // Update CRC with chunk data
+        for &byte in &data {
+            crc = update_crc(crc, byte);
+        }
+
+        // Finalize CRC
+        let crc = !crc;
+
+        PngChunk {
+            size,
+            ty: chunk_type,
+            data,
+            crc,
+        }
     }
 }
 
