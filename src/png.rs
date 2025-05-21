@@ -4,14 +4,14 @@ const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
 #[derive(Debug, Clone)]
 pub struct PngRgbaImage {
-    width: usize,
-    height: usize,
+    width: u32,
+    height: u32,
     data: Vec<u8>,
 }
 
 impl PngRgbaImage {
-    pub fn new(width: usize, height: usize, data: Vec<u8>) -> Option<Self> {
-        if (width * height * 4) != data.len() {
+    pub fn new(width: u32, height: u32, data: Vec<u8>) -> Option<Self> {
+        if (width * height * 4) as usize != data.len() {
             None
         } else {
             Some(Self {
@@ -23,7 +23,6 @@ impl PngRgbaImage {
     }
 
     pub fn write_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        // Write PNG signature
         writer.write_all(&PNG_SIGNATURE)?;
 
         // Create and write IHDR chunk
