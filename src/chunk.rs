@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use crate::crc::WriterWithCrc;
+use crate::crc::CrcWriter;
 
 #[derive(Debug, Clone)]
 pub struct IhdrChunk {
@@ -21,7 +21,7 @@ impl IhdrChunk {
     pub fn write_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
         writer.write_all(&Self::SIZE.to_be_bytes())?;
 
-        let mut writer = WriterWithCrc::new(writer);
+        let mut writer = CrcWriter::new(writer);
         writer.write_all(b"IDHR")?;
         writer.write_all(&self.width.to_be_bytes())?;
         writer.write_all(&self.height.to_be_bytes())?;

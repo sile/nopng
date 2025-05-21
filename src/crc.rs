@@ -30,14 +30,13 @@ fn update_crc(crc: u32, byte: u8) -> u32 {
     (crc >> 8) ^ CRC_TABLE[((crc & 0xFF) ^ byte as u32) as usize]
 }
 
-// TODO: rename
 #[derive(Debug)]
-pub struct WriterWithCrc<W> {
+pub struct CrcWriter<W> {
     inner: W,
     crc: u32,
 }
 
-impl<W: Write> WriterWithCrc<W> {
+impl<W: Write> CrcWriter<W> {
     pub fn new(inner: W) -> Self {
         Self {
             inner,
@@ -50,7 +49,7 @@ impl<W: Write> WriterWithCrc<W> {
     }
 }
 
-impl<W: Write> Write for WriterWithCrc<W> {
+impl<W: Write> Write for CrcWriter<W> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let written_size = self.inner.write(buf)?;
         for b in &buf[..written_size] {
