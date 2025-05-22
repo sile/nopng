@@ -1,6 +1,8 @@
 use std::io::Write;
 
-use crate::{adler32::Adler32Writer, crc::CrcWriter, zlib::ZlibHeader};
+use crate::{
+    adler32::Adler32Writer, crc::CrcWriter, deflate::DeflateNoCompressionEncoder, zlib::ZlibHeader,
+};
 
 #[derive(Debug, Clone)]
 pub struct IhdrChunk {
@@ -87,7 +89,7 @@ impl<'a> IdatChunk<'a> {
 
         ZlibHeader.write_to(writer)?;
         let mut writer = Adler32Writer::new(writer);
-        writer.write_all(&filtered_data)?; // TODO
+        DeflateNoCompressionEncoder.encode(&mut writer, &filtered_data)?;
         writer.finish()?;
 
         Ok(())
