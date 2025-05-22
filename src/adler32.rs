@@ -1,6 +1,5 @@
 use std::io::Write;
 
-const ADLER32_INITIAL: u32 = 1;
 const ADLER32_MOD: u32 = 65521; // Largest prime number less than 65536
 
 #[derive(Debug)]
@@ -14,8 +13,8 @@ impl<W: Write> Adler32Writer<W> {
     pub fn new(inner: W) -> Self {
         Self {
             inner,
-            s1: ADLER32_INITIAL & 0xFFFF,
-            s2: (ADLER32_INITIAL >> 16) & 0xFFFF,
+            s1: 1,
+            s2: 0,
         }
     }
 
@@ -39,4 +38,3 @@ impl<W: Write> Write for Adler32Writer<W> {
         self.inner.flush()
     }
 }
-// TODO: Adler32Writer
