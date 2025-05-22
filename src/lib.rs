@@ -1,6 +1,8 @@
-pub mod adler32;
-pub mod chunk;
-pub mod crc;
-pub mod deflate;
-pub mod png;
-pub mod zlib;
+mod adler32;
+mod chunk;
+mod crc;
+mod deflate;
+mod png;
+mod zlib;
+
+pub use png::PngRgbaImage;
