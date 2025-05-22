@@ -54,18 +54,29 @@ impl IendChunk {
 }
 
 #[derive(Debug, Clone)]
-pub struct IdatChunk;
+pub struct IdatChunk<'a> {
+    pub stride: usize,
+    pub data: &'a [u8],
+}
 
-impl IdatChunk {
-    const SIZE: u32 = 0;
+impl<'a> IdatChunk<'a> {
+    const FILTER_TYPE_NONE: u8 = 0;
 
     pub fn write_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        writer.write_all(&Self::SIZE.to_be_bytes())?;
+        let mut chunk_data = Vec::new();
+        self.write_chunk_data_to(&mut chunk_data)?;
+
+        writer.write_all(&(chunk_data.len() as u32).to_be_bytes())?;
 
         let mut writer = CrcWriter::new(writer);
         writer.write_all(b"IDAT")?;
+        writer.write_all(&chunk_data)?;
         writer.finish()?;
 
+        Ok(())
+    }
+
+    fn write_chunk_data_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
         Ok(())
     }
 }

@@ -34,7 +34,11 @@ impl PngRgbaImage {
             color_type: IhdrChunk::COLOR_TYPE_RGBA,
         }
         .write_to(writer)?;
-        IdatChunk.write_to(writer)?;
+        IdatChunk {
+            stride: self.width as usize,
+            data: &self.data,
+        }
+        .write_to(writer)?;
         IendChunk.write_to(writer)?;
 
         Ok(())
