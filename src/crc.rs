@@ -45,7 +45,8 @@ impl<W: Write> CrcWriter<W> {
     }
 
     pub fn finish(mut self) -> std::io::Result<()> {
-        self.inner.write_all(&self.crc.to_be_bytes())
+        let final_crc = self.crc ^ CRC_INITIAL;
+        self.inner.write_all(&final_crc.to_be_bytes())
     }
 }
 

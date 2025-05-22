@@ -25,6 +25,7 @@ impl PngRgbaImage {
     }
 
     pub fn write_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        // Is there problem to write a PNG file?
         writer.write_all(&PNG_SIGNATURE)?;
 
         IhdrChunk {
