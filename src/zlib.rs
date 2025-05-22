@@ -4,6 +4,7 @@ use std::io::Write;
 pub struct ZlibHeader;
 
 impl ZlibHeader {
+    #[expect(clippy::unusual_byte_groupings)]
     pub fn write_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
         // Write the CMF and FLG bytes
         writer.write_all(&[
