@@ -24,7 +24,7 @@ impl IhdrChunk {
         writer.write_all(&Self::SIZE.to_be_bytes())?;
 
         let mut writer = CrcWriter::new(writer);
-        writer.write_all(b"IDHR")?;
+        writer.write_all(b"IHDR")?;
         writer.write_all(&self.width.to_be_bytes())?;
         writer.write_all(&self.height.to_be_bytes())?;
         writer.write_all(&[self.bit_depth])?;
