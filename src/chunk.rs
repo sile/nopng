@@ -59,7 +59,7 @@ pub struct IdatChunk<'a> {
     pub data: &'a [u8],
 }
 
-impl<'a> IdatChunk<'a> {
+impl IdatChunk<'_> {
     const FILTER_TYPE_NONE: u8 = 0;
 
     pub fn write_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
