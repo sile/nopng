@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use crate::crc::CrcWriter;
+use crate::{adler32::Adler32Writer, crc::CrcWriter, zlib::ZlibHeader};
 
 #[derive(Debug, Clone)]
 pub struct IhdrChunk {
@@ -77,38 +77,19 @@ impl<'a> IdatChunk<'a> {
     }
 
     fn write_chunk_data_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        let filtered_data = self
+            .data
+            .chunks(self.stride)
+            .flat_map(|scanline| {
+                std::iter::once(Self::FILTER_TYPE_NONE).chain(scanline.iter().copied())
+            })
+            .collect::<Vec<_>>();
+
+        ZlibHeader.write_to(writer)?;
+        let mut writer = Adler32Writer::new(writer);
+        writer.write_all(&filtered_data)?; // TODO
+        writer.finish()?;
+
         Ok(())
     }
 }
-
-// fn create_idat_data(&self) -> std::io::Result<Vec<u8>> {
-//     // use flate2::Compression;
-//     // use flate2::write::ZlibEncoder;
-//     // use std::io::Cursor;
-
-//     // // Prepare scanlines with filtering
-//     // let mut filtered_data = Vec::with_capacity(self.height * (1 + self.width * 4));
-
-//     // // For each scanline, add filter type byte (0 = None) followed by raw pixel data
-//     // for y in 0..self.height {
-//     //     // Filter type 0 (None)
-//     //     filtered_data.push(0);
-
-//     //     // Add the raw pixel data for this scanline
-//     //     let start = y * self.width * 4;
-//     //     let end = start + self.width * 4;
-//     //     filtered_data.extend_from_slice(&self.data[start..end]);
-//     // }
-
-//     // // Compress the filtered scanlines using zlib
-//     // let mut compressed_data = Vec::new();
-//     // {
-//     //     let mut encoder =
-//     //         ZlibEncoder::new(Cursor::new(&mut compressed_data), Compression::default());
-//     //     encoder.write_all(&filtered_data)?;
-//     //     encoder.finish()?;
-//     // }
-
-//     // Ok(compressed_data)
-//     todo!()
-// }

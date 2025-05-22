@@ -35,7 +35,7 @@ impl PngRgbaImage {
         }
         .write_to(writer)?;
         IdatChunk {
-            stride: self.width as usize,
+            stride: self.width as usize * 4,
             data: &self.data,
         }
         .write_to(writer)?;
