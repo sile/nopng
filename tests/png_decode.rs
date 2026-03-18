@@ -148,6 +148,56 @@ fn decodes_16bit_rgba() {
 }
 
 #[test]
+fn decodes_interlaced_palette_png() {
+    let image = PngRgbaImage::from_bytes(include_bytes!("data/palette_interlaced.png")).unwrap();
+    assert_eq!(image.width(), 5);
+    assert_eq!(image.height(), 5);
+    assert_eq!(
+        image.data(),
+        &[
+            255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 0, 255, 255, 0, 255, 255, 0, 0, 255, 255,
+            255, 0, 255, 0, 0, 255, 0, 0, 255, 0, 128, 255, 0, 0, 255, 255, 255, 0, 255, 0, 255, 0,
+            128, 255, 0, 0, 255, 255, 255, 0, 255, 0, 0, 255, 0, 0, 255, 0, 128, 0, 0, 255, 0, 255,
+            255, 0, 255, 255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 0, 255, 0, 0, 255, 0, 0, 255,
+            0, 0, 255, 0, 128, 255, 255, 0, 255, 255, 0, 0, 255,
+        ]
+    );
+}
+
+#[test]
+fn decodes_interlaced_rgba_png() {
+    let image = PngRgbaImage::from_bytes(include_bytes!("data/rgba_interlaced.png")).unwrap();
+    assert_eq!(image.width(), 4);
+    assert_eq!(image.height(), 4);
+    assert_eq!(
+        image.data(),
+        &[
+            255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 255, 255, 255, 0, 64, 10, 20, 30, 40, 50,
+            60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 200, 10, 20, 255, 30, 200, 40, 200,
+            50, 60, 220, 180, 70, 80, 90, 100, 0, 0, 0, 0, 255, 255, 255, 255, 20, 40, 60, 80, 100,
+            120, 140, 160,
+        ]
+    );
+}
+
+#[test]
+fn decodes_interlaced_16bit_grayscale_png() {
+    let image = PngRgbaImage::from_bytes(include_bytes!("data/gray16_interlaced.png")).unwrap();
+    assert_eq!(image.width(), 5);
+    assert_eq!(image.height(), 4);
+    assert_eq!(
+        image.data(),
+        &[
+            0, 0, 0, 255, 34, 34, 34, 255, 68, 68, 68, 255, 102, 102, 102, 255, 136, 136, 136, 255,
+            153, 153, 153, 255, 170, 170, 170, 255, 187, 187, 187, 255, 204, 204, 204, 255, 221,
+            221, 221, 255, 238, 238, 238, 255, 255, 255, 255, 255, 19, 19, 19, 255, 36, 36, 36,
+            255, 54, 54, 54, 255, 171, 171, 171, 255, 18, 18, 18, 0, 128, 128, 128, 255, 1, 1, 1,
+            255, 240, 240, 240, 255,
+        ]
+    );
+}
+
+#[test]
 fn rejects_crc_mismatch() {
     let mut bytes = include_bytes!("data/gray_filters.png").to_vec();
     let index = bytes.len() - 1;

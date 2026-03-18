@@ -4,6 +4,50 @@ use crate::chunk::{IdatChunk, IendChunk, IhdrChunk};
 use crate::{adler32, crc, deflate};
 
 const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+const ADAM7_PASSES: [Adam7Pass; 7] = [
+    Adam7Pass {
+        x_start: 0,
+        y_start: 0,
+        x_step: 8,
+        y_step: 8,
+    },
+    Adam7Pass {
+        x_start: 4,
+        y_start: 0,
+        x_step: 8,
+        y_step: 8,
+    },
+    Adam7Pass {
+        x_start: 0,
+        y_start: 4,
+        x_step: 4,
+        y_step: 8,
+    },
+    Adam7Pass {
+        x_start: 2,
+        y_start: 0,
+        x_step: 4,
+        y_step: 4,
+    },
+    Adam7Pass {
+        x_start: 0,
+        y_start: 2,
+        x_step: 2,
+        y_step: 4,
+    },
+    Adam7Pass {
+        x_start: 1,
+        y_start: 0,
+        x_step: 2,
+        y_step: 2,
+    },
+    Adam7Pass {
+        x_start: 0,
+        y_start: 1,
+        x_step: 1,
+        y_step: 2,
+    },
+];
 
 #[derive(Debug)]
 pub enum PngDecodeError {
@@ -164,8 +208,7 @@ impl PngRgbaImage {
         ancillary.validate(&header)?;
 
         let filtered = decompress_zlib(&idat_data)?;
-        let raw = unfilter_scanlines(&header, &filtered)?;
-        let rgba = convert_to_rgba(&header, &raw, &ancillary)?;
+        let rgba = decode_to_rgba(&header, &filtered, &ancillary)?;
         Self::new(header.width, header.height, rgba)
             .ok_or_else(|| PngDecodeError::InvalidData("decoded image size mismatch".into()))
     }
@@ -255,7 +298,7 @@ impl PngHeader {
                 self.filter_method
             )));
         }
-        if self.interlace_method != 0 {
+        if self.interlace_method > 1 {
             return Err(PngDecodeError::Unsupported(format!(
                 "unsupported interlace method: {}",
                 self.interlace_method
@@ -290,13 +333,6 @@ impl PngHeader {
 
     fn bytes_per_pixel(&self) -> usize {
         self.bits_per_pixel().div_ceil(8)
-    }
-
-    fn packed_stride(&self) -> Result<usize, PngDecodeError> {
-        (self.width as usize)
-            .checked_mul(self.bits_per_pixel())
-            .map(|bits| bits.div_ceil(8))
-            .ok_or_else(|| PngDecodeError::InvalidData("scanline stride overflow".into()))
     }
 
     fn filter_bpp(&self) -> usize {
@@ -493,10 +529,28 @@ fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>, PngDecodeError> {
     Ok(decoded)
 }
 
-fn unfilter_scanlines(header: &PngHeader, filtered: &[u8]) -> Result<Vec<u8>, PngDecodeError> {
-    let stride = header.packed_stride()?;
+fn decode_to_rgba(
+    header: &PngHeader,
+    filtered: &[u8],
+    ancillary: &AncillaryChunks,
+) -> Result<Vec<u8>, PngDecodeError> {
+    if header.interlace_method == 0 {
+        let raw = unfilter_scanlines(header, header.width, header.height, filtered)?;
+        convert_to_rgba(header, header.width, header.height, &raw, ancillary)
+    } else {
+        decode_adam7_to_rgba(header, filtered, ancillary)
+    }
+}
+
+fn unfilter_scanlines(
+    header: &PngHeader,
+    width: u32,
+    height: u32,
+    filtered: &[u8],
+) -> Result<Vec<u8>, PngDecodeError> {
+    let stride = packed_stride_for_width(header, width)?;
     let expected_len = (stride + 1)
-        .checked_mul(header.height as usize)
+        .checked_mul(height as usize)
         .ok_or_else(|| PngDecodeError::InvalidData("filtered data size overflow".into()))?;
     if filtered.len() != expected_len {
         return Err(PngDecodeError::InvalidData(format!(
@@ -507,8 +561,8 @@ fn unfilter_scanlines(header: &PngHeader, filtered: &[u8]) -> Result<Vec<u8>, Pn
     }
 
     let bpp = header.filter_bpp();
-    let mut raw = vec![0; stride * header.height as usize];
-    for row in 0..header.height as usize {
+    let mut raw = vec![0; stride * height as usize];
+    for row in 0..height as usize {
         let filter = filtered[row * (stride + 1)];
         let src = &filtered[row * (stride + 1) + 1..(row + 1) * (stride + 1)];
         let row_start = row * stride;
@@ -565,15 +619,17 @@ fn unfilter_scanlines(header: &PngHeader, filtered: &[u8]) -> Result<Vec<u8>, Pn
 
 fn convert_to_rgba(
     header: &PngHeader,
+    width: u32,
+    height: u32,
     raw: &[u8],
     ancillary: &AncillaryChunks,
 ) -> Result<Vec<u8>, PngDecodeError> {
-    let pixel_count = (header.width as usize)
-        .checked_mul(header.height as usize)
+    let pixel_count = (width as usize)
+        .checked_mul(height as usize)
         .ok_or_else(|| PngDecodeError::InvalidData("pixel count overflow".into()))?;
     let mut rgba = Vec::with_capacity(pixel_count * 4);
     match (header.color_type, header.bit_depth) {
-        (0, 1 | 2 | 4) => decode_grayscale_packed(header, raw, ancillary, &mut rgba)?,
+        (0, 1 | 2 | 4) => decode_grayscale_packed(header, width, raw, ancillary, &mut rgba)?,
         (0, 8) => {
             let transparent = match ancillary.transparency {
                 Some(Transparency::Grayscale(value)) => Some(value),
@@ -609,7 +665,7 @@ fn convert_to_rgba(
             }
         }
         (2, 16) => decode_truecolor16(raw, ancillary, &mut rgba),
-        (3, 1 | 2 | 4 | 8) => decode_palette(header, raw, ancillary, &mut rgba)?,
+        (3, 1 | 2 | 4 | 8) => decode_palette(header, width, raw, ancillary, &mut rgba)?,
         (4, 8) => {
             for chunk in raw.chunks_exact(2) {
                 rgba.extend_from_slice(&[chunk[0], chunk[0], chunk[0], chunk[1]]);
@@ -625,6 +681,7 @@ fn convert_to_rgba(
 
 fn decode_grayscale_packed(
     header: &PngHeader,
+    width: u32,
     raw: &[u8],
     ancillary: &AncillaryChunks,
     rgba: &mut Vec<u8>,
@@ -633,9 +690,9 @@ fn decode_grayscale_packed(
         Some(Transparency::Grayscale(value)) => Some(value),
         _ => None,
     };
-    let row_stride = header.packed_stride()?;
+    let row_stride = packed_stride_for_width(header, width)?;
     for row in raw.chunks_exact(row_stride) {
-        for gray in unpack_samples(row, header.width as usize, header.bit_depth) {
+        for gray in unpack_samples(row, width as usize, header.bit_depth) {
             let gray_sample = u16::from(gray);
             let gray8 = scale_sample_to_u8(gray_sample, header.bit_depth);
             let alpha = if Some(gray_sample) == transparent {
@@ -704,6 +761,7 @@ fn decode_rgba16(raw: &[u8], rgba: &mut Vec<u8>) {
 
 fn decode_palette(
     header: &PngHeader,
+    width: u32,
     raw: &[u8],
     ancillary: &AncillaryChunks,
     rgba: &mut Vec<u8>,
@@ -716,9 +774,9 @@ fn decode_palette(
         Some(Transparency::Palette(alpha)) => Some(alpha.as_slice()),
         _ => None,
     };
-    let row_stride = header.packed_stride()?;
+    let row_stride = packed_stride_for_width(header, width)?;
     for row in raw.chunks_exact(row_stride) {
-        for index in unpack_samples(row, header.width as usize, header.bit_depth) {
+        for index in unpack_samples(row, width as usize, header.bit_depth) {
             let Some(rgb) = palette.get(index as usize) else {
                 return Err(PngDecodeError::InvalidData(format!(
                     "palette index out of range: {}",
@@ -755,6 +813,95 @@ fn scale_sample_to_u8(sample: u16, bit_depth: u8) -> u8 {
 
 fn downsample_u16(sample: u16) -> u8 {
     (sample >> 8) as u8
+}
+
+fn packed_stride_for_width(header: &PngHeader, width: u32) -> Result<usize, PngDecodeError> {
+    (width as usize)
+        .checked_mul(header.bits_per_pixel())
+        .map(|bits| bits.div_ceil(8))
+        .ok_or_else(|| PngDecodeError::InvalidData("scanline stride overflow".into()))
+}
+
+fn decode_adam7_to_rgba(
+    header: &PngHeader,
+    filtered: &[u8],
+    ancillary: &AncillaryChunks,
+) -> Result<Vec<u8>, PngDecodeError> {
+    let mut rgba = vec![0; header.width as usize * header.height as usize * 4];
+    let mut offset = 0;
+
+    for pass in ADAM7_PASSES {
+        let pass_width = adam7_axis_size(header.width, pass.x_start, pass.x_step);
+        let pass_height = adam7_axis_size(header.height, pass.y_start, pass.y_step);
+        if pass_width == 0 || pass_height == 0 {
+            continue;
+        }
+
+        let pass_stride = packed_stride_for_width(header, pass_width)?;
+        let pass_filtered_len = (pass_stride + 1)
+            .checked_mul(pass_height as usize)
+            .ok_or_else(|| PngDecodeError::InvalidData("Adam7 pass size overflow".into()))?;
+        let pass_filtered = filtered
+            .get(offset..offset + pass_filtered_len)
+            .ok_or_else(|| PngDecodeError::InvalidData("truncated Adam7 data".into()))?;
+        offset += pass_filtered_len;
+
+        let pass_raw = unfilter_scanlines(header, pass_width, pass_height, pass_filtered)?;
+        let pass_rgba = convert_to_rgba(header, pass_width, pass_height, &pass_raw, ancillary)?;
+        scatter_adam7_pass(
+            &mut rgba,
+            header.width,
+            pass,
+            pass_width,
+            pass_height,
+            &pass_rgba,
+        );
+    }
+
+    if offset != filtered.len() {
+        return Err(PngDecodeError::InvalidData(format!(
+            "unexpected Adam7 data size: consumed {}, got {}",
+            offset,
+            filtered.len()
+        )));
+    }
+
+    Ok(rgba)
+}
+
+fn scatter_adam7_pass(
+    full_rgba: &mut [u8],
+    full_width: u32,
+    pass: Adam7Pass,
+    pass_width: u32,
+    pass_height: u32,
+    pass_rgba: &[u8],
+) {
+    for pass_y in 0..pass_height as usize {
+        for pass_x in 0..pass_width as usize {
+            let x = pass.x_start as usize + pass_x * pass.x_step as usize;
+            let y = pass.y_start as usize + pass_y * pass.y_step as usize;
+            let dst = (y * full_width as usize + x) * 4;
+            let src = (pass_y * pass_width as usize + pass_x) * 4;
+            full_rgba[dst..dst + 4].copy_from_slice(&pass_rgba[src..src + 4]);
+        }
+    }
+}
+
+fn adam7_axis_size(size: u32, start: u8, step: u8) -> u32 {
+    if size <= u32::from(start) {
+        0
+    } else {
+        (size - u32::from(start)).div_ceil(u32::from(step))
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Adam7Pass {
+    x_start: u8,
+    y_start: u8,
+    x_step: u8,
+    y_step: u8,
 }
 
 fn paeth_predictor(a: u8, b: u8, c: u8) -> u8 {
