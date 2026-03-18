@@ -5,4 +5,5 @@ mod deflate;
 mod png;
 mod zlib;
 
+pub use png::PngDecodeError;
 pub use png::PngRgbaImage;
