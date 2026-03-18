@@ -9,9 +9,10 @@ mod deflate;
 mod png;
 mod zlib;
 
+pub use png::Error;
 pub use png::PngBitDepth;
 pub use png::PngColorMode;
 pub use png::PngEncoding;
-pub use png::Error;
 pub use png::PngImage;
+pub use png::PngInfo;
 pub use png::Result;

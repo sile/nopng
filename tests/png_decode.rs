@@ -1,4 +1,4 @@
-use nopng::{Error, PngImage};
+use nopng::{Error, PngImage, PngInfo};
 
 #[test]
 fn decodes_grayscale_png() {
@@ -12,6 +12,18 @@ fn decodes_grayscale_png() {
             255, 200, 200, 200, 255,
         ]
     );
+}
+
+#[test]
+fn reads_png_info_from_ihdr() {
+    let info = PngInfo::from_bytes(include_bytes!("data/gray16_interlaced.png")).unwrap();
+    assert_eq!(info.width, 5);
+    assert_eq!(info.height, 4);
+    assert_eq!(info.bit_depth, nopng::PngBitDepth::Sixteen);
+    assert_eq!(info.color_mode, nopng::PngColorMode::Grayscale);
+    assert!(info.interlaced);
+    assert_eq!(info.pixel_count(), Some(20));
+    assert_eq!(info.decoded_rgba8_bytes(), Some(80));
 }
 
 #[test]
@@ -97,8 +109,7 @@ fn decodes_4bit_palette_with_trns() {
 
 #[test]
 fn decodes_8bit_palette_with_split_idat() {
-    let image =
-        PngImage::from_bytes(include_bytes!("data/palette_8bit_split_idat.png")).unwrap();
+    let image = PngImage::from_bytes(include_bytes!("data/palette_8bit_split_idat.png")).unwrap();
     assert_eq!(image.width(), 3);
     assert_eq!(image.height(), 2);
     assert_eq!(
@@ -203,9 +214,7 @@ fn rejects_crc_mismatch() {
     let index = bytes.len() - 1;
     bytes[index] ^= 0x01;
     let error = PngImage::from_bytes(&bytes).unwrap_err();
-    assert!(
-        matches!(error, Error::InvalidData(message) if message.contains("CRC mismatch"))
-    );
+    assert!(matches!(error, Error::InvalidData(message) if message.contains("CRC mismatch")));
 }
 
 #[test]
@@ -214,9 +223,7 @@ fn rejects_missing_plte_for_palette_image() {
     remove_chunk(&mut bytes, b"PLTE");
     remove_chunk(&mut bytes, b"tRNS");
     let error = PngImage::from_bytes(&bytes).unwrap_err();
-    assert!(
-        matches!(error, Error::InvalidData(message) if message.contains("missing PLTE"))
-    );
+    assert!(matches!(error, Error::InvalidData(message) if message.contains("missing PLTE")));
 }
 
 #[test]

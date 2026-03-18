@@ -31,6 +31,7 @@ Supported Decoding
 
 Decoded images are returned as RGBA8 via `PngImage`.
 If the source PNG is 16-bit, samples are downconverted to 8-bit when stored in `PngImage`.
+Use `nopng::PngInfo::from_bytes()` if you want to inspect width, height, bit depth, or interlace mode before doing a full decode.
 
 Supported Encoding
 ------------------
@@ -49,6 +50,7 @@ no_std
 ------
 
 - The library itself is `no_std` and uses `alloc`
+- `nopng::PngInfo::from_bytes(&[u8])` reads only the PNG signature and `IHDR`
 - Decoding is byte-based via `PngImage::from_bytes(&[u8])`
 - Encoding is byte-based via `PngImage::to_bytes()`
 - `std` is only needed by callers that want file or console I/O
@@ -58,6 +60,11 @@ Example
 
 ```rust
 fn convert(bytes: &[u8]) -> nopng::Result<Vec<u8>> {
+    let info = nopng::PngInfo::from_bytes(bytes)?;
+    if info.decoded_rgba8_bytes().unwrap_or(usize::MAX) > 16 * 1024 * 1024 {
+        return Err(nopng::Error::InvalidData("image is too large".into()));
+    }
+
     let mut image = nopng::PngImage::from_bytes(bytes)?;
     *image.encoding_mut() = nopng::PngEncoding {
         color_mode: nopng::PngColorMode::Indexed,

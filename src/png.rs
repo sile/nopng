@@ -144,6 +144,60 @@ impl Default for PngEncoding {
     }
 }
 
+/// Basic PNG information read from the PNG signature and `IHDR` chunk.
+///
+/// This type is intended for cheap preflight checks such as rejecting images
+/// whose dimensions are too large for the caller's policy. It does not perform
+/// full PNG validation and does not inspect later chunks such as `PLTE`, `tRNS`
+/// or `IDAT`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PngInfo {
+    pub width: u32,
+    pub height: u32,
+    pub bit_depth: PngBitDepth,
+    pub color_mode: PngColorMode,
+    pub interlaced: bool,
+}
+
+impl PngInfo {
+    /// Reads basic PNG information from the PNG signature and `IHDR` chunk.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        let header = parse_png_header(bytes)?;
+        Ok(Self::from_header(&header))
+    }
+
+    pub fn pixel_count(&self) -> Option<usize> {
+        (self.width as usize).checked_mul(self.height as usize)
+    }
+
+    pub fn decoded_rgba8_bytes(&self) -> Option<usize> {
+        self.pixel_count()?.checked_mul(4)
+    }
+
+    pub fn filtered_bytes(&self) -> Option<usize> {
+        let header = PngHeader {
+            width: self.width,
+            height: self.height,
+            bit_depth: self.bit_depth.as_u8(),
+            color_type: color_type_from_color_mode(self.color_mode),
+            compression_method: 0,
+            filter_method: 0,
+            interlace_method: u8::from(self.interlaced),
+        };
+        expected_filtered_len(&header).ok()
+    }
+
+    fn from_header(header: &PngHeader) -> Self {
+        Self {
+            width: header.width,
+            height: header.height,
+            bit_depth: PngBitDepth::from_u8(header.bit_depth).expect("validated bit depth"),
+            color_mode: color_mode_from_color_type(header.color_type),
+            interlaced: header.interlace_method == 1,
+        }
+    }
+}
+
 impl PngEncoding {
     /// Infers a concrete PNG encoding from RGBA8 bytes.
     ///
@@ -235,101 +289,36 @@ impl PngImage {
     /// This is the public decode entry point. 16-bit input is downconverted to
     /// 8-bit pixel data. The original PNG representation is summarized in
     /// [`PngImage::encoding`].
+    ///
+    /// This method validates the expected decode sizes implied by `IHDR`, such
+    /// as filtered scanline sizes and final RGBA8 output size, and rejects
+    /// streams whose decoded layout is inconsistent with those values.
+    ///
+    /// This method does not impose a caller-configurable size policy. Call
+    /// [`PngInfo::from_bytes`] first if you want to reject images based on
+    /// width, height, pixel count, or expected decoded RGBA8 size before doing
+    /// a full decode.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() < PNG_SIGNATURE.len() || bytes[..PNG_SIGNATURE.len()] != PNG_SIGNATURE {
-            return Err(Error::InvalidData("invalid PNG signature".into()));
-        }
-
-        let mut cursor = Cursor::new(&bytes[PNG_SIGNATURE.len()..]);
-        let mut header = None;
-        let mut idat_data = Vec::new();
-        let mut ancillary = AncillaryChunks::default();
-        let mut seen_idat = false;
-        let mut seen_iend = false;
-
-        while cursor.remaining() > 0 {
-            let length = cursor.read_u32()? as usize;
-            let chunk_type = cursor.read_array::<4>()?;
-            let chunk_data = cursor.read_bytes(length)?;
-            let expected_crc = cursor.read_u32()?;
-
-            let mut crc_input = Vec::with_capacity(4 + chunk_data.len());
-            crc_input.extend_from_slice(&chunk_type);
-            crc_input.extend_from_slice(chunk_data);
-            let actual_crc = crc::calculate(&crc_input);
-            if actual_crc != expected_crc {
-                return Err(Error::InvalidData(format!(
-                    "CRC mismatch for chunk {}",
-                    core::str::from_utf8(&chunk_type).unwrap_or("????"),
-                )));
-            }
-
-            match &chunk_type {
-                b"IHDR" => {
-                    if header.is_some() {
-                        return Err(Error::InvalidData("duplicate IHDR chunk".into()));
-                    }
-                    if seen_idat {
-                        return Err(Error::InvalidData("IHDR chunk after IDAT".into()));
-                    }
-                    header = Some(PngHeader::parse(chunk_data)?);
-                }
-                b"PLTE" => {
-                    let Some(header) = header else {
-                        return Err(Error::InvalidData(
-                            "PLTE chunk before IHDR".into(),
-                        ));
-                    };
-                    if seen_idat {
-                        return Err(Error::InvalidData(
-                            "PLTE appears after IDAT".into(),
-                        ));
-                    }
-                    ancillary.set_palette(parse_palette(chunk_data, header.color_type)?)?;
-                }
-                b"tRNS" => {
-                    let Some(header) = header else {
-                        return Err(Error::InvalidData(
-                            "tRNS chunk before IHDR".into(),
-                        ));
-                    };
-                    if seen_idat {
-                        return Err(Error::InvalidData(
-                            "tRNS appears after IDAT".into(),
-                        ));
-                    }
-                    ancillary
-                        .set_transparency(parse_transparency(chunk_data, &header, &ancillary)?)?;
-                }
-                b"IDAT" => {
-                    if header.is_none() {
-                        return Err(Error::InvalidData(
-                            "IDAT chunk before IHDR".into(),
-                        ));
-                    }
-                    seen_idat = true;
-                    idat_data.extend_from_slice(chunk_data);
-                }
-                b"IEND" => {
-                    seen_iend = true;
-                    break;
-                }
-                _ => {}
-            }
-        }
-
-        if !seen_iend {
-            return Err(Error::InvalidData("missing IEND chunk".into()));
-        }
-        let header =
-            header.ok_or_else(|| Error::InvalidData("missing IHDR chunk".into()))?;
-        if idat_data.is_empty() {
-            return Err(Error::InvalidData("missing IDAT chunk".into()));
-        }
-        ancillary.validate(&header)?;
-
+        let (header, ancillary, idat_data) = parse_png(bytes)?;
+        expected_filtered_len(&header)?;
+        expected_raw_len(&header)?;
+        let expected_rgba_len = expected_rgba8_len(&header)?;
         let filtered = decompress_zlib(&idat_data)?;
+        if filtered.len() != expected_filtered_len(&header)? {
+            return Err(Error::InvalidData(format!(
+                "unexpected filtered data size: expected {}, got {}",
+                expected_filtered_len(&header)?,
+                filtered.len()
+            )));
+        }
         let rgba = decode_to_rgba(&header, &filtered, &ancillary)?;
+        if rgba.len() != expected_rgba_len {
+            return Err(Error::InvalidData(format!(
+                "unexpected decoded RGBA8 size: expected {}, got {}",
+                expected_rgba_len,
+                rgba.len()
+            )));
+        }
         let encoding = PngEncoding::from_decoded_image(&header, &ancillary);
         Self::new_with_encoding(header.width, header.height, rgba, encoding)
     }
@@ -485,6 +474,20 @@ impl PngHeader {
     }
 }
 
+fn parse_png_header(bytes: &[u8]) -> Result<PngHeader> {
+    if bytes.len() < PNG_SIGNATURE.len() || bytes[..PNG_SIGNATURE.len()] != PNG_SIGNATURE {
+        return Err(Error::InvalidData("invalid PNG signature".into()));
+    }
+    let mut cursor = Cursor::new(&bytes[PNG_SIGNATURE.len()..]);
+    let length = cursor.read_u32()? as usize;
+    let chunk_type = cursor.read_array::<4>()?;
+    if chunk_type != *b"IHDR" {
+        return Err(Error::InvalidData("missing IHDR chunk".into()));
+    }
+    let chunk_data = cursor.read_bytes(length)?;
+    PngHeader::parse(chunk_data)
+}
+
 #[derive(Debug, Clone)]
 enum Transparency {
     Grayscale(u16),
@@ -517,9 +520,7 @@ impl AncillaryChunks {
 
     fn validate(&self, header: &PngHeader) -> Result<()> {
         if header.color_type == 3 && self.palette.is_none() {
-            return Err(Error::InvalidData(
-                "missing PLTE for palette image".into(),
-            ));
+            return Err(Error::InvalidData("missing PLTE for palette image".into()));
         }
         if header.color_type != 3 && self.palette.is_some() {
             return Err(Error::InvalidData(
@@ -625,11 +626,92 @@ fn parse_transparency(
     }
 }
 
+fn parse_png(bytes: &[u8]) -> Result<(PngHeader, AncillaryChunks, Vec<u8>)> {
+    if bytes.len() < PNG_SIGNATURE.len() || bytes[..PNG_SIGNATURE.len()] != PNG_SIGNATURE {
+        return Err(Error::InvalidData("invalid PNG signature".into()));
+    }
+
+    let mut cursor = Cursor::new(&bytes[PNG_SIGNATURE.len()..]);
+    let mut header = None;
+    let mut idat_data = Vec::new();
+    let mut ancillary = AncillaryChunks::default();
+    let mut seen_idat = false;
+    let mut seen_iend = false;
+
+    while cursor.remaining() > 0 {
+        let length = cursor.read_u32()? as usize;
+        let chunk_type = cursor.read_array::<4>()?;
+        let chunk_data = cursor.read_bytes(length)?;
+        let expected_crc = cursor.read_u32()?;
+
+        let mut crc_input = Vec::with_capacity(4 + chunk_data.len());
+        crc_input.extend_from_slice(&chunk_type);
+        crc_input.extend_from_slice(chunk_data);
+        let actual_crc = crc::calculate(&crc_input);
+        if actual_crc != expected_crc {
+            return Err(Error::InvalidData(format!(
+                "CRC mismatch for chunk {}",
+                core::str::from_utf8(&chunk_type).unwrap_or("????"),
+            )));
+        }
+
+        match &chunk_type {
+            b"IHDR" => {
+                if header.is_some() {
+                    return Err(Error::InvalidData("duplicate IHDR chunk".into()));
+                }
+                if seen_idat {
+                    return Err(Error::InvalidData("IHDR chunk after IDAT".into()));
+                }
+                header = Some(PngHeader::parse(chunk_data)?);
+            }
+            b"PLTE" => {
+                let Some(header) = header else {
+                    return Err(Error::InvalidData("PLTE chunk before IHDR".into()));
+                };
+                if seen_idat {
+                    return Err(Error::InvalidData("PLTE appears after IDAT".into()));
+                }
+                ancillary.set_palette(parse_palette(chunk_data, header.color_type)?)?;
+            }
+            b"tRNS" => {
+                let Some(header) = header else {
+                    return Err(Error::InvalidData("tRNS chunk before IHDR".into()));
+                };
+                if seen_idat {
+                    return Err(Error::InvalidData("tRNS appears after IDAT".into()));
+                }
+                ancillary.set_transparency(parse_transparency(chunk_data, &header, &ancillary)?)?;
+            }
+            b"IDAT" => {
+                if header.is_none() {
+                    return Err(Error::InvalidData("IDAT chunk before IHDR".into()));
+                }
+                seen_idat = true;
+                idat_data.extend_from_slice(chunk_data);
+            }
+            b"IEND" => {
+                seen_iend = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    if !seen_iend {
+        return Err(Error::InvalidData("missing IEND chunk".into()));
+    }
+    let header = header.ok_or_else(|| Error::InvalidData("missing IHDR chunk".into()))?;
+    if idat_data.is_empty() {
+        return Err(Error::InvalidData("missing IDAT chunk".into()));
+    }
+    ancillary.validate(&header)?;
+    Ok((header, ancillary, idat_data))
+}
+
 fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>> {
     if data.len() < 6 {
-        return Err(Error::InvalidData(
-            "zlib stream is too short".into(),
-        ));
+        return Err(Error::InvalidData("zlib stream is too short".into()));
     }
 
     let cmf = data[0];
@@ -647,9 +729,7 @@ fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>> {
         )));
     }
     if cmf >> 4 > 7 {
-        return Err(Error::Unsupported(
-            "zlib window size is too large".into(),
-        ));
+        return Err(Error::Unsupported("zlib window size is too large".into()));
     }
     if (flg & 0x20) != 0 {
         return Err(Error::Unsupported(
@@ -663,9 +743,7 @@ fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>> {
     let expected_adler = u32::from_be_bytes(data[data.len() - 4..].try_into().unwrap());
     let actual_adler = adler32::calculate(&decoded);
     if actual_adler != expected_adler {
-        return Err(Error::InvalidData(
-            "zlib adler32 checksum mismatch".into(),
-        ));
+        return Err(Error::InvalidData("zlib adler32 checksum mismatch".into()));
     }
     Ok(decoded)
 }
@@ -681,6 +759,50 @@ fn decode_to_rgba(
     } else {
         decode_adam7_to_rgba(header, filtered, ancillary)
     }
+}
+
+fn expected_filtered_len(header: &PngHeader) -> Result<usize> {
+    if header.interlace_method == 0 {
+        expected_filtered_len_for_size(header, header.width, header.height)
+    } else {
+        let mut total = 0usize;
+        for pass in ADAM7_PASSES {
+            let pass_width = adam7_axis_size(header.width, pass.x_start, pass.x_step);
+            let pass_height = adam7_axis_size(header.height, pass.y_start, pass.y_step);
+            if pass_width == 0 || pass_height == 0 {
+                continue;
+            }
+            total = total
+                .checked_add(expected_filtered_len_for_size(
+                    header,
+                    pass_width,
+                    pass_height,
+                )?)
+                .ok_or_else(|| Error::InvalidData("filtered data size overflow".into()))?;
+        }
+        Ok(total)
+    }
+}
+
+fn expected_filtered_len_for_size(header: &PngHeader, width: u32, height: u32) -> Result<usize> {
+    let stride = packed_stride_for_width(header, width)?;
+    (stride + 1)
+        .checked_mul(height as usize)
+        .ok_or_else(|| Error::InvalidData("filtered data size overflow".into()))
+}
+
+fn expected_raw_len(header: &PngHeader) -> Result<usize> {
+    let stride = packed_stride_for_width(header, header.width)?;
+    stride
+        .checked_mul(header.height as usize)
+        .ok_or_else(|| Error::InvalidData("raw image size overflow".into()))
+}
+
+fn expected_rgba8_len(header: &PngHeader) -> Result<usize> {
+    (header.width as usize)
+        .checked_mul(header.height as usize)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| Error::InvalidData("decoded RGBA8 size overflow".into()))
 }
 
 fn unfilter_scanlines(
@@ -967,12 +1089,7 @@ struct EncodedImage {
 }
 
 impl EncodedImage {
-    fn from_rgba(
-        width: u32,
-        height: u32,
-        rgba: &[u8],
-        encoding: PngEncoding,
-    ) -> Result<Self> {
+    fn from_rgba(width: u32, height: u32, rgba: &[u8], encoding: PngEncoding) -> Result<Self> {
         let pixels = rgba
             .chunks_exact(4)
             .map(|chunk| [chunk[0], chunk[1], chunk[2], chunk[3]])
@@ -1125,6 +1242,16 @@ fn color_mode_from_color_type(color_type: u8) -> PngColorMode {
     }
 }
 
+fn color_type_from_color_mode(color_mode: PngColorMode) -> u8 {
+    match color_mode {
+        PngColorMode::Grayscale => 0,
+        PngColorMode::Rgb => 2,
+        PngColorMode::Indexed => 3,
+        PngColorMode::GrayscaleAlpha => 4,
+        PngColorMode::Rgba => 6,
+    }
+}
+
 fn infer_encoding_from_pixels(pixels: &[[u8; 4]]) -> PngEncoding {
     let opaque = pixels_are_opaque(pixels);
     let grayscale = pixels_are_grayscale(pixels);
@@ -1135,13 +1262,19 @@ fn infer_encoding_from_pixels(pixels: &[[u8; 4]]) -> PngEncoding {
         .len();
 
     let (color_mode, bit_depth) = if grayscale && opaque {
-        (PngColorMode::Grayscale, grayscale_bit_depth(pixels, gray_level_count))
+        (
+            PngColorMode::Grayscale,
+            grayscale_bit_depth(pixels, gray_level_count),
+        )
     } else if grayscale {
         (PngColorMode::GrayscaleAlpha, PngBitDepth::Eight)
     } else if opaque {
         (PngColorMode::Rgb, PngBitDepth::Eight)
     } else if let Some(indexed) = analyze_palette(pixels) {
-        (PngColorMode::Indexed, indexed_bit_depth(indexed.palette.len()))
+        (
+            PngColorMode::Indexed,
+            indexed_bit_depth(indexed.palette.len()),
+        )
     } else {
         (PngColorMode::Rgba, PngBitDepth::Eight)
     };
@@ -1182,10 +1315,7 @@ fn validate_exact_bit_depth(
     }
 }
 
-fn validate_grayscale_bit_depth(
-    pixels: &[[u8; 4]],
-    bit_depth: PngBitDepth,
-) -> Result<()> {
+fn validate_grayscale_bit_depth(pixels: &[[u8; 4]], bit_depth: PngBitDepth) -> Result<()> {
     validate_exact_bit_depth(
         PngColorMode::Grayscale,
         bit_depth,
@@ -1566,9 +1696,7 @@ impl<'a> Cursor<'a> {
             .checked_add(len)
             .ok_or_else(|| Error::InvalidData("PNG chunk size overflow".into()))?;
         let Some(bytes) = self.bytes.get(self.offset..end) else {
-            return Err(Error::InvalidData(
-                "unexpected end of PNG stream".into(),
-            ));
+            return Err(Error::InvalidData("unexpected end of PNG stream".into()));
         };
         self.offset = end;
         Ok(bytes)
@@ -1579,7 +1707,9 @@ impl<'a> Cursor<'a> {
 mod tests {
     use alloc::vec;
 
-    use super::{Error, IhdrChunk, PngBitDepth, PngColorMode, PngEncoding, PngImage};
+    use super::{
+        Error, IhdrChunk, PNG_SIGNATURE, PngBitDepth, PngColorMode, PngEncoding, PngImage, PngInfo,
+    };
 
     #[test]
     fn roundtrip_rgba_writer_and_reader() {
@@ -1680,7 +1810,9 @@ mod tests {
     #[test]
     fn new_rejects_rgba8_length_mismatch() {
         let error = PngImage::new(2, 1, vec![0, 1, 2, 3]).unwrap_err();
-        assert!(matches!(error, Error::InvalidData(message) if message.contains("image size does not match RGBA8 buffer length")));
+        assert!(
+            matches!(error, Error::InvalidData(message) if message.contains("image size does not match RGBA8 buffer length"))
+        );
     }
 
     #[test]
@@ -1696,12 +1828,15 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert!(matches!(error, Error::InvalidData(message) if message.contains("image size does not match RGBA8 buffer length")));
+        assert!(
+            matches!(error, Error::InvalidData(message) if message.contains("image size does not match RGBA8 buffer length"))
+        );
     }
 
     #[test]
     fn decoding_preserves_source_encoding_summary() {
-        let image = PngImage::from_bytes(include_bytes!("../tests/data/gray16_interlaced.png")).unwrap();
+        let image =
+            PngImage::from_bytes(include_bytes!("../tests/data/gray16_interlaced.png")).unwrap();
         assert_eq!(
             image.encoding(),
             &PngEncoding {
@@ -1714,13 +1849,20 @@ mod tests {
 
     #[test]
     fn writing_with_sixteen_bit_encoding_writes_eight_bit_png() {
-        let image = PngImage::from_bytes(include_bytes!("../tests/data/gray16_interlaced.png")).unwrap();
+        let image =
+            PngImage::from_bytes(include_bytes!("../tests/data/gray16_interlaced.png")).unwrap();
         let bytes = image.to_bytes().unwrap();
 
         let ihdr = read_ihdr(&bytes);
         assert_eq!(ihdr.bit_depth, 8);
         assert_eq!(ihdr.color_type, IhdrChunk::COLOR_TYPE_GRAYSCALE_ALPHA);
         assert_eq!(ihdr.interlace_method, 1);
+    }
+
+    #[test]
+    fn png_info_rejects_truncated_ihdr() {
+        let error = PngInfo::from_bytes(&PNG_SIGNATURE).unwrap_err();
+        assert!(matches!(error, Error::InvalidData(message) if message.contains("unexpected end")));
     }
 
     struct IhdrInfo {
