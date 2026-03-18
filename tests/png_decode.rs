@@ -111,6 +111,43 @@ fn decodes_8bit_palette_with_split_idat() {
 }
 
 #[test]
+fn decodes_16bit_grayscale_with_trns() {
+    let image = PngRgbaImage::from_bytes(include_bytes!("data/gray16_trns.png")).unwrap();
+    assert_eq!(image.width(), 2);
+    assert_eq!(image.height(), 2);
+    assert_eq!(
+        image.data(),
+        &[
+            18, 18, 18, 0, 171, 171, 171, 255, 18, 18, 18, 0, 255, 255, 255, 255,
+        ]
+    );
+}
+
+#[test]
+fn decodes_16bit_truecolor_with_trns() {
+    let image = PngRgbaImage::from_bytes(include_bytes!("data/rgb16_trns.png")).unwrap();
+    assert_eq!(image.width(), 2);
+    assert_eq!(image.height(), 1);
+    assert_eq!(image.data(), &[255, 0, 0, 0, 17, 34, 51, 255,]);
+}
+
+#[test]
+fn decodes_16bit_grayscale_alpha() {
+    let image = PngRgbaImage::from_bytes(include_bytes!("data/gray_alpha16.png")).unwrap();
+    assert_eq!(image.width(), 2);
+    assert_eq!(image.height(), 1);
+    assert_eq!(image.data(), &[0, 0, 0, 255, 128, 128, 128, 18,]);
+}
+
+#[test]
+fn decodes_16bit_rgba() {
+    let image = PngRgbaImage::from_bytes(include_bytes!("data/rgba16.png")).unwrap();
+    assert_eq!(image.width(), 2);
+    assert_eq!(image.height(), 1);
+    assert_eq!(image.data(), &[255, 128, 0, 255, 18, 171, 255, 1,]);
+}
+
+#[test]
 fn rejects_crc_mismatch() {
     let mut bytes = include_bytes!("data/gray_filters.png").to_vec();
     let index = bytes.len() - 1;

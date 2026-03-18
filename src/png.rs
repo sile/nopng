@@ -262,7 +262,11 @@ impl PngHeader {
             )));
         }
         match (self.color_type, self.bit_depth) {
-            (0, 1 | 2 | 4 | 8) | (3, 1 | 2 | 4 | 8) | (2, 8) | (4, 8) | (6, 8) => Ok(()),
+            (0, 1 | 2 | 4 | 8 | 16)
+            | (3, 1 | 2 | 4 | 8)
+            | (2, 8 | 16)
+            | (4, 8 | 16)
+            | (6, 8 | 16) => Ok(()),
             _ => Err(PngDecodeError::Unsupported(format!(
                 "unsupported color type/bit depth combination: color_type={}, bit_depth={}",
                 self.color_type, self.bit_depth
@@ -306,7 +310,8 @@ impl PngHeader {
 
 #[derive(Debug, Clone)]
 enum Transparency {
-    Grayscale(u8),
+    Grayscale(u16),
+    Truecolor([u16; 3]),
     Palette(Vec<u8>),
 }
 
@@ -346,6 +351,7 @@ impl AncillaryChunks {
         }
         match (&self.transparency, header.color_type) {
             (Some(Transparency::Grayscale(_)), 0) => {}
+            (Some(Transparency::Truecolor(_)), 2) => {}
             (Some(Transparency::Palette(alpha)), 3) => {
                 let palette_len = self.palette.as_ref().map_or(0, Vec::len);
                 if alpha.len() > palette_len {
@@ -403,16 +409,29 @@ fn parse_transparency(
                 ));
             }
             let sample = u16::from_be_bytes([chunk_data[0], chunk_data[1]]);
-            let max = (1u16 << header.bit_depth) - 1;
+            let max = if header.bit_depth == 16 {
+                u16::MAX
+            } else {
+                (1u16 << header.bit_depth) - 1
+            };
             if sample > max {
                 return Err(PngDecodeError::InvalidChunk(
                     "invalid grayscale transparency sample".into(),
                 ));
             }
-            Ok(Transparency::Grayscale(scale_sample_to_u8(
-                sample,
-                header.bit_depth,
-            )))
+            Ok(Transparency::Grayscale(sample))
+        }
+        2 => {
+            if chunk_data.len() != 6 {
+                return Err(PngDecodeError::InvalidChunk(
+                    "truecolor tRNS chunk must contain 6 bytes".into(),
+                ));
+            }
+            Ok(Transparency::Truecolor([
+                u16::from_be_bytes([chunk_data[0], chunk_data[1]]),
+                u16::from_be_bytes([chunk_data[2], chunk_data[3]]),
+                u16::from_be_bytes([chunk_data[4], chunk_data[5]]),
+            ]))
         }
         3 => {
             if ancillary.palette.is_none() {
@@ -561,22 +580,44 @@ fn convert_to_rgba(
                 _ => None,
             };
             for &gray in raw {
-                let alpha = if Some(gray) == transparent { 0 } else { 255 };
+                let alpha = if Some(u16::from(gray)) == transparent {
+                    0
+                } else {
+                    255
+                };
                 rgba.extend_from_slice(&[gray, gray, gray, alpha]);
             }
         }
+        (0, 16) => decode_grayscale16(raw, ancillary, &mut rgba),
         (2, 8) => {
+            let transparent = match ancillary.transparency {
+                Some(Transparency::Truecolor(value)) => Some(value),
+                _ => None,
+            };
             for chunk in raw.chunks_exact(3) {
-                rgba.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 255]);
+                let alpha = if Some([
+                    u16::from(chunk[0]),
+                    u16::from(chunk[1]),
+                    u16::from(chunk[2]),
+                ]) == transparent
+                {
+                    0
+                } else {
+                    255
+                };
+                rgba.extend_from_slice(&[chunk[0], chunk[1], chunk[2], alpha]);
             }
         }
+        (2, 16) => decode_truecolor16(raw, ancillary, &mut rgba),
         (3, 1 | 2 | 4 | 8) => decode_palette(header, raw, ancillary, &mut rgba)?,
         (4, 8) => {
             for chunk in raw.chunks_exact(2) {
                 rgba.extend_from_slice(&[chunk[0], chunk[0], chunk[0], chunk[1]]);
             }
         }
+        (4, 16) => decode_grayscale_alpha16(raw, &mut rgba),
         (6, 8) => rgba.extend_from_slice(raw),
+        (6, 16) => decode_rgba16(raw, &mut rgba),
         _ => unreachable!(),
     }
     Ok(rgba)
@@ -595,12 +636,70 @@ fn decode_grayscale_packed(
     let row_stride = header.packed_stride()?;
     for row in raw.chunks_exact(row_stride) {
         for gray in unpack_samples(row, header.width as usize, header.bit_depth) {
-            let gray = scale_sample_to_u8(u16::from(gray), header.bit_depth);
-            let alpha = if Some(gray) == transparent { 0 } else { 255 };
-            rgba.extend_from_slice(&[gray, gray, gray, alpha]);
+            let gray_sample = u16::from(gray);
+            let gray8 = scale_sample_to_u8(gray_sample, header.bit_depth);
+            let alpha = if Some(gray_sample) == transparent {
+                0
+            } else {
+                255
+            };
+            rgba.extend_from_slice(&[gray8, gray8, gray8, alpha]);
         }
     }
     Ok(())
+}
+
+fn decode_grayscale16(raw: &[u8], ancillary: &AncillaryChunks, rgba: &mut Vec<u8>) {
+    let transparent = match ancillary.transparency {
+        Some(Transparency::Grayscale(value)) => Some(value),
+        _ => None,
+    };
+    for chunk in raw.chunks_exact(2) {
+        let gray16 = u16::from_be_bytes([chunk[0], chunk[1]]);
+        let gray8 = downsample_u16(gray16);
+        let alpha = if Some(gray16) == transparent { 0 } else { 255 };
+        rgba.extend_from_slice(&[gray8, gray8, gray8, alpha]);
+    }
+}
+
+fn decode_truecolor16(raw: &[u8], ancillary: &AncillaryChunks, rgba: &mut Vec<u8>) {
+    let transparent = match ancillary.transparency {
+        Some(Transparency::Truecolor(value)) => Some(value),
+        _ => None,
+    };
+    for chunk in raw.chunks_exact(6) {
+        let rgb16 = [
+            u16::from_be_bytes([chunk[0], chunk[1]]),
+            u16::from_be_bytes([chunk[2], chunk[3]]),
+            u16::from_be_bytes([chunk[4], chunk[5]]),
+        ];
+        let alpha = if Some(rgb16) == transparent { 0 } else { 255 };
+        rgba.extend_from_slice(&[
+            downsample_u16(rgb16[0]),
+            downsample_u16(rgb16[1]),
+            downsample_u16(rgb16[2]),
+            alpha,
+        ]);
+    }
+}
+
+fn decode_grayscale_alpha16(raw: &[u8], rgba: &mut Vec<u8>) {
+    for chunk in raw.chunks_exact(4) {
+        let gray = downsample_u16(u16::from_be_bytes([chunk[0], chunk[1]]));
+        let alpha = downsample_u16(u16::from_be_bytes([chunk[2], chunk[3]]));
+        rgba.extend_from_slice(&[gray, gray, gray, alpha]);
+    }
+}
+
+fn decode_rgba16(raw: &[u8], rgba: &mut Vec<u8>) {
+    for chunk in raw.chunks_exact(8) {
+        rgba.extend_from_slice(&[
+            downsample_u16(u16::from_be_bytes([chunk[0], chunk[1]])),
+            downsample_u16(u16::from_be_bytes([chunk[2], chunk[3]])),
+            downsample_u16(u16::from_be_bytes([chunk[4], chunk[5]])),
+            downsample_u16(u16::from_be_bytes([chunk[6], chunk[7]])),
+        ]);
+    }
 }
 
 fn decode_palette(
@@ -652,6 +751,10 @@ fn scale_sample_to_u8(sample: u16, bit_depth: u8) -> u8 {
     } else {
         ((u32::from(sample) * 255) / ((1u32 << bit_depth) - 1)) as u8
     }
+}
+
+fn downsample_u16(sample: u16) -> u8 {
+    (sample >> 8) as u8
 }
 
 fn paeth_predictor(a: u8, b: u8, c: u8) -> u8 {
