@@ -11,7 +11,7 @@ mod zlib;
 
 pub use png::PngBitDepth;
 pub use png::PngColorMode;
-pub use png::PngDecodeError;
 pub use png::PngEncoding;
-pub use png::PngEncodeError;
+pub use png::Error;
 pub use png::PngImage;
+pub use png::Result;

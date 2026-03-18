@@ -57,9 +57,8 @@ Example
 -------
 
 ```rust
-fn convert(bytes: &[u8]) -> Result<Vec<u8>, nopng::PngEncodeError> {
-    let mut image = nopng::PngImage::from_bytes(bytes)
-        .map_err(|e| nopng::PngEncodeError::InvalidData(e.to_string()))?;
+fn convert(bytes: &[u8]) -> nopng::Result<Vec<u8>> {
+    let mut image = nopng::PngImage::from_bytes(bytes)?;
     *image.encoding_mut() = nopng::PngEncoding {
         color_mode: nopng::PngColorMode::Indexed,
         bit_depth: nopng::PngBitDepth::Four,

@@ -80,17 +80,17 @@ pub struct IdatChunk<'a> {
 }
 
 impl IdatChunk<'_> {
-    pub fn append_to(&self, out: &mut Vec<u8>) -> Result<(), crate::png::PngEncodeError> {
+    pub fn append_to(&self, out: &mut Vec<u8>) -> crate::png::Result<()> {
         let chunk_data = self.chunk_data()?;
         append_chunk(out, b"IDAT", &chunk_data);
         Ok(())
     }
 
-    fn chunk_data(&self) -> Result<Vec<u8>, crate::png::PngEncodeError> {
+    fn chunk_data(&self) -> crate::png::Result<Vec<u8>> {
         let mut data = Vec::new();
         data.extend_from_slice(&ZlibHeader.bytes());
         let deflated = deflate::compress(self.filtered_data).map_err(|error| {
-            crate::png::PngEncodeError::InvalidData(format!("invalid deflate stream: {error}"))
+            crate::png::Error::InvalidData(format!("invalid deflate stream: {error}"))
         })?;
         data.extend_from_slice(&deflated);
         data.extend_from_slice(&adler32::calculate(self.filtered_data).to_be_bytes());

@@ -3,7 +3,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::error::Error;
+use core::error::Error as CoreError;
 
 use crate::chunk::{IdatChunk, IendChunk, IhdrChunk, PlteChunk, TrnsChunk};
 use crate::{adler32, crc, deflate};
@@ -55,20 +55,14 @@ const ADAM7_PASSES: [Adam7Pass; 7] = [
 ];
 
 #[derive(Debug)]
-pub enum PngDecodeError {
-    InvalidSignature,
-    InvalidChunk(String),
+pub enum Error {
     Unsupported(String),
     InvalidData(String),
 }
 
-#[derive(Debug)]
-pub enum PngEncodeError {
-    Unsupported(String),
-    InvalidData(String),
-}
+pub type Result<T> = core::result::Result<T, Error>;
 
-impl core::fmt::Display for PngEncodeError {
+impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Unsupported(message) => f.write_str(message),
@@ -77,8 +71,8 @@ impl core::fmt::Display for PngEncodeError {
     }
 }
 
-impl Error for PngEncodeError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
+impl CoreError for Error {
+    fn source(&self) -> Option<&(dyn CoreError + 'static)> {
         match self {
             Self::Unsupported(_) | Self::InvalidData(_) => None,
         }
@@ -182,28 +176,6 @@ impl PngEncoding {
     }
 }
 
-impl core::fmt::Display for PngDecodeError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::InvalidSignature => f.write_str("invalid PNG signature"),
-            Self::InvalidChunk(message) => f.write_str(message),
-            Self::Unsupported(message) => f.write_str(message),
-            Self::InvalidData(message) => f.write_str(message),
-        }
-    }
-}
-
-impl Error for PngDecodeError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::InvalidSignature
-            | Self::InvalidChunk(_)
-            | Self::Unsupported(_)
-            | Self::InvalidData(_) => None,
-        }
-    }
-}
-
 /// PNG image data stored as RGBA8 pixels.
 ///
 /// Decoding a 16-bit PNG downconverts samples to 8-bit before storing them here.
@@ -257,9 +229,9 @@ impl PngImage {
     /// This is the public decode entry point. 16-bit input is downconverted to
     /// 8-bit pixel data. The original PNG representation is summarized in
     /// [`PngImage::encoding`].
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, PngDecodeError> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         if bytes.len() < PNG_SIGNATURE.len() || bytes[..PNG_SIGNATURE.len()] != PNG_SIGNATURE {
-            return Err(PngDecodeError::InvalidSignature);
+            return Err(Error::InvalidData("invalid PNG signature".into()));
         }
 
         let mut cursor = Cursor::new(&bytes[PNG_SIGNATURE.len()..]);
@@ -280,7 +252,7 @@ impl PngImage {
             crc_input.extend_from_slice(chunk_data);
             let actual_crc = crc::calculate(&crc_input);
             if actual_crc != expected_crc {
-                return Err(PngDecodeError::InvalidChunk(format!(
+                return Err(Error::InvalidData(format!(
                     "CRC mismatch for chunk {}",
                     core::str::from_utf8(&chunk_type).unwrap_or("????"),
                 )));
@@ -289,21 +261,21 @@ impl PngImage {
             match &chunk_type {
                 b"IHDR" => {
                     if header.is_some() {
-                        return Err(PngDecodeError::InvalidChunk("duplicate IHDR chunk".into()));
+                        return Err(Error::InvalidData("duplicate IHDR chunk".into()));
                     }
                     if seen_idat {
-                        return Err(PngDecodeError::InvalidChunk("IHDR chunk after IDAT".into()));
+                        return Err(Error::InvalidData("IHDR chunk after IDAT".into()));
                     }
                     header = Some(PngHeader::parse(chunk_data)?);
                 }
                 b"PLTE" => {
                     let Some(header) = header else {
-                        return Err(PngDecodeError::InvalidChunk(
+                        return Err(Error::InvalidData(
                             "PLTE chunk before IHDR".into(),
                         ));
                     };
                     if seen_idat {
-                        return Err(PngDecodeError::InvalidChunk(
+                        return Err(Error::InvalidData(
                             "PLTE appears after IDAT".into(),
                         ));
                     }
@@ -311,12 +283,12 @@ impl PngImage {
                 }
                 b"tRNS" => {
                     let Some(header) = header else {
-                        return Err(PngDecodeError::InvalidChunk(
+                        return Err(Error::InvalidData(
                             "tRNS chunk before IHDR".into(),
                         ));
                     };
                     if seen_idat {
-                        return Err(PngDecodeError::InvalidChunk(
+                        return Err(Error::InvalidData(
                             "tRNS appears after IDAT".into(),
                         ));
                     }
@@ -325,7 +297,7 @@ impl PngImage {
                 }
                 b"IDAT" => {
                     if header.is_none() {
-                        return Err(PngDecodeError::InvalidChunk(
+                        return Err(Error::InvalidData(
                             "IDAT chunk before IHDR".into(),
                         ));
                     }
@@ -341,12 +313,12 @@ impl PngImage {
         }
 
         if !seen_iend {
-            return Err(PngDecodeError::InvalidChunk("missing IEND chunk".into()));
+            return Err(Error::InvalidData("missing IEND chunk".into()));
         }
         let header =
-            header.ok_or_else(|| PngDecodeError::InvalidChunk("missing IHDR chunk".into()))?;
+            header.ok_or_else(|| Error::InvalidData("missing IHDR chunk".into()))?;
         if idat_data.is_empty() {
-            return Err(PngDecodeError::InvalidChunk("missing IDAT chunk".into()));
+            return Err(Error::InvalidData("missing IDAT chunk".into()));
         }
         ancillary.validate(&header)?;
 
@@ -354,7 +326,7 @@ impl PngImage {
         let rgba = decode_to_rgba(&header, &filtered, &ancillary)?;
         let encoding = PngEncoding::from_decoded_image(&header, &ancillary);
         Self::new_with_encoding(header.width, header.height, rgba, encoding)
-            .ok_or_else(|| PngDecodeError::InvalidData("decoded image size mismatch".into()))
+            .ok_or_else(|| Error::InvalidData("decoded image size mismatch".into()))
     }
 
     pub fn width(&self) -> u32 {
@@ -381,7 +353,7 @@ impl PngImage {
     ///
     /// If `self.encoding.bit_depth` is [`PngBitDepth::Sixteen`], this method
     /// writes an 8-bit PNG because `PngImage` stores RGBA8 pixels.
-    pub fn to_bytes(&self) -> Result<Vec<u8>, PngEncodeError> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
         let encoded = EncodedImage::from_rgba(self.width, self.height, &self.data, self.encoding)?;
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&PNG_SIGNATURE);
@@ -422,16 +394,16 @@ struct PngHeader {
 }
 
 impl PngHeader {
-    fn parse(chunk_data: &[u8]) -> Result<Self, PngDecodeError> {
+    fn parse(chunk_data: &[u8]) -> Result<Self> {
         if chunk_data.len() != 13 {
-            return Err(PngDecodeError::InvalidChunk(
+            return Err(Error::InvalidData(
                 "IHDR chunk must contain 13 bytes".into(),
             ));
         }
         let width = u32::from_be_bytes(chunk_data[0..4].try_into().unwrap());
         let height = u32::from_be_bytes(chunk_data[4..8].try_into().unwrap());
         if width == 0 || height == 0 {
-            return Err(PngDecodeError::InvalidData(
+            return Err(Error::InvalidData(
                 "image dimensions must be non-zero".into(),
             ));
         }
@@ -449,21 +421,21 @@ impl PngHeader {
         Ok(header)
     }
 
-    fn validate(&self) -> Result<(), PngDecodeError> {
+    fn validate(&self) -> Result<()> {
         if self.compression_method != 0 {
-            return Err(PngDecodeError::Unsupported(format!(
+            return Err(Error::Unsupported(format!(
                 "unsupported compression method: {}",
                 self.compression_method
             )));
         }
         if self.filter_method != 0 {
-            return Err(PngDecodeError::Unsupported(format!(
+            return Err(Error::Unsupported(format!(
                 "unsupported filter method: {}",
                 self.filter_method
             )));
         }
         if self.interlace_method > 1 {
-            return Err(PngDecodeError::Unsupported(format!(
+            return Err(Error::Unsupported(format!(
                 "unsupported interlace method: {}",
                 self.interlace_method
             )));
@@ -474,7 +446,7 @@ impl PngHeader {
             | (2, 8 | 16)
             | (4, 8 | 16)
             | (6, 8 | 16) => Ok(()),
-            _ => Err(PngDecodeError::Unsupported(format!(
+            _ => Err(Error::Unsupported(format!(
                 "unsupported color type/bit depth combination: color_type={}, bit_depth={}",
                 self.color_type, self.bit_depth
             ))),
@@ -522,30 +494,30 @@ struct AncillaryChunks {
 }
 
 impl AncillaryChunks {
-    fn set_palette(&mut self, palette: Vec<[u8; 3]>) -> Result<(), PngDecodeError> {
+    fn set_palette(&mut self, palette: Vec<[u8; 3]>) -> Result<()> {
         if self.palette.is_some() {
-            return Err(PngDecodeError::InvalidChunk("duplicate PLTE chunk".into()));
+            return Err(Error::InvalidData("duplicate PLTE chunk".into()));
         }
         self.palette = Some(palette);
         Ok(())
     }
 
-    fn set_transparency(&mut self, transparency: Transparency) -> Result<(), PngDecodeError> {
+    fn set_transparency(&mut self, transparency: Transparency) -> Result<()> {
         if self.transparency.is_some() {
-            return Err(PngDecodeError::InvalidChunk("duplicate tRNS chunk".into()));
+            return Err(Error::InvalidData("duplicate tRNS chunk".into()));
         }
         self.transparency = Some(transparency);
         Ok(())
     }
 
-    fn validate(&self, header: &PngHeader) -> Result<(), PngDecodeError> {
+    fn validate(&self, header: &PngHeader) -> Result<()> {
         if header.color_type == 3 && self.palette.is_none() {
-            return Err(PngDecodeError::InvalidChunk(
+            return Err(Error::InvalidData(
                 "missing PLTE for palette image".into(),
             ));
         }
         if header.color_type != 3 && self.palette.is_some() {
-            return Err(PngDecodeError::InvalidChunk(
+            return Err(Error::InvalidData(
                 "PLTE chunk is only supported for palette images".into(),
             ));
         }
@@ -555,13 +527,13 @@ impl AncillaryChunks {
             (Some(Transparency::Palette(alpha)), 3) => {
                 let palette_len = self.palette.as_ref().map_or(0, Vec::len);
                 if alpha.len() > palette_len {
-                    return Err(PngDecodeError::InvalidChunk(
+                    return Err(Error::InvalidData(
                         "tRNS length exceeds palette length".into(),
                     ));
                 }
             }
             (Some(_), _) => {
-                return Err(PngDecodeError::InvalidChunk(format!(
+                return Err(Error::InvalidData(format!(
                     "tRNS is not allowed for color type {}",
                     header.color_type
                 )));
@@ -572,15 +544,15 @@ impl AncillaryChunks {
     }
 }
 
-fn parse_palette(chunk_data: &[u8], color_type: u8) -> Result<Vec<[u8; 3]>, PngDecodeError> {
+fn parse_palette(chunk_data: &[u8], color_type: u8) -> Result<Vec<[u8; 3]>> {
     if color_type != 3 {
-        return Err(PngDecodeError::InvalidChunk(format!(
+        return Err(Error::InvalidData(format!(
             "PLTE is not allowed for color type {}",
             color_type
         )));
     }
     if chunk_data.is_empty() || !chunk_data.len().is_multiple_of(3) {
-        return Err(PngDecodeError::InvalidChunk(
+        return Err(Error::InvalidData(
             "PLTE length must be a non-zero multiple of 3".into(),
         ));
     }
@@ -589,7 +561,7 @@ fn parse_palette(chunk_data: &[u8], color_type: u8) -> Result<Vec<[u8; 3]>, PngD
         .map(|chunk| [chunk[0], chunk[1], chunk[2]])
         .collect::<Vec<_>>();
     if palette.len() > 256 {
-        return Err(PngDecodeError::InvalidChunk(
+        return Err(Error::InvalidData(
             "PLTE must not contain more than 256 entries".into(),
         ));
     }
@@ -600,11 +572,11 @@ fn parse_transparency(
     chunk_data: &[u8],
     header: &PngHeader,
     ancillary: &AncillaryChunks,
-) -> Result<Transparency, PngDecodeError> {
+) -> Result<Transparency> {
     match header.color_type {
         0 => {
             if chunk_data.len() != 2 {
-                return Err(PngDecodeError::InvalidChunk(
+                return Err(Error::InvalidData(
                     "grayscale tRNS chunk must contain 2 bytes".into(),
                 ));
             }
@@ -615,7 +587,7 @@ fn parse_transparency(
                 (1u16 << header.bit_depth) - 1
             };
             if sample > max {
-                return Err(PngDecodeError::InvalidChunk(
+                return Err(Error::InvalidData(
                     "invalid grayscale transparency sample".into(),
                 ));
             }
@@ -623,7 +595,7 @@ fn parse_transparency(
         }
         2 => {
             if chunk_data.len() != 6 {
-                return Err(PngDecodeError::InvalidChunk(
+                return Err(Error::InvalidData(
                     "truecolor tRNS chunk must contain 6 bytes".into(),
                 ));
             }
@@ -635,22 +607,22 @@ fn parse_transparency(
         }
         3 => {
             if ancillary.palette.is_none() {
-                return Err(PngDecodeError::InvalidChunk(
+                return Err(Error::InvalidData(
                     "tRNS chunk must appear after PLTE".into(),
                 ));
             }
             Ok(Transparency::Palette(chunk_data.to_vec()))
         }
-        _ => Err(PngDecodeError::InvalidChunk(format!(
+        _ => Err(Error::InvalidData(format!(
             "tRNS is not allowed for color type {}",
             header.color_type
         ))),
     }
 }
 
-fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>, PngDecodeError> {
+fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>> {
     if data.len() < 6 {
-        return Err(PngDecodeError::InvalidData(
+        return Err(Error::InvalidData(
             "zlib stream is too short".into(),
         ));
     }
@@ -659,34 +631,34 @@ fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>, PngDecodeError> {
     let flg = data[1];
     let header = u16::from(cmf) << 8 | u16::from(flg);
     if header % 31 != 0 {
-        return Err(PngDecodeError::InvalidData(
+        return Err(Error::InvalidData(
             "zlib header check bits are invalid".into(),
         ));
     }
     if cmf & 0x0F != 8 {
-        return Err(PngDecodeError::Unsupported(format!(
+        return Err(Error::Unsupported(format!(
             "unsupported zlib compression method: {}",
             cmf & 0x0F
         )));
     }
     if cmf >> 4 > 7 {
-        return Err(PngDecodeError::Unsupported(
+        return Err(Error::Unsupported(
             "zlib window size is too large".into(),
         ));
     }
     if (flg & 0x20) != 0 {
-        return Err(PngDecodeError::Unsupported(
+        return Err(Error::Unsupported(
             "zlib preset dictionary is not supported".into(),
         ));
     }
 
     let deflate_bytes = &data[2..data.len() - 4];
     let decoded = deflate::decompress(deflate_bytes)
-        .map_err(|error| PngDecodeError::InvalidData(format!("invalid deflate stream: {error}")))?;
+        .map_err(|error| Error::InvalidData(format!("invalid deflate stream: {error}")))?;
     let expected_adler = u32::from_be_bytes(data[data.len() - 4..].try_into().unwrap());
     let actual_adler = adler32::calculate(&decoded);
     if actual_adler != expected_adler {
-        return Err(PngDecodeError::InvalidData(
+        return Err(Error::InvalidData(
             "zlib adler32 checksum mismatch".into(),
         ));
     }
@@ -697,7 +669,7 @@ fn decode_to_rgba(
     header: &PngHeader,
     filtered: &[u8],
     ancillary: &AncillaryChunks,
-) -> Result<Vec<u8>, PngDecodeError> {
+) -> Result<Vec<u8>> {
     if header.interlace_method == 0 {
         let raw = unfilter_scanlines(header, header.width, header.height, filtered)?;
         convert_to_rgba(header, header.width, header.height, &raw, ancillary)
@@ -711,13 +683,13 @@ fn unfilter_scanlines(
     width: u32,
     height: u32,
     filtered: &[u8],
-) -> Result<Vec<u8>, PngDecodeError> {
+) -> Result<Vec<u8>> {
     let stride = packed_stride_for_width(header, width)?;
     let expected_len = (stride + 1)
         .checked_mul(height as usize)
-        .ok_or_else(|| PngDecodeError::InvalidData("filtered data size overflow".into()))?;
+        .ok_or_else(|| Error::InvalidData("filtered data size overflow".into()))?;
     if filtered.len() != expected_len {
-        return Err(PngDecodeError::InvalidData(format!(
+        return Err(Error::InvalidData(format!(
             "unexpected filtered data size: expected {}, got {}",
             expected_len,
             filtered.len()
@@ -771,7 +743,7 @@ fn unfilter_scanlines(
                 }
             }
             _ => {
-                return Err(PngDecodeError::InvalidData(format!(
+                return Err(Error::InvalidData(format!(
                     "unsupported PNG filter type: {}",
                     filter
                 )));
@@ -787,10 +759,10 @@ fn convert_to_rgba(
     height: u32,
     raw: &[u8],
     ancillary: &AncillaryChunks,
-) -> Result<Vec<u8>, PngDecodeError> {
+) -> Result<Vec<u8>> {
     let pixel_count = (width as usize)
         .checked_mul(height as usize)
-        .ok_or_else(|| PngDecodeError::InvalidData("pixel count overflow".into()))?;
+        .ok_or_else(|| Error::InvalidData("pixel count overflow".into()))?;
     let mut rgba = Vec::with_capacity(pixel_count * 4);
     match (header.color_type, header.bit_depth) {
         (0, 1 | 2 | 4) => decode_grayscale_packed(header, width, raw, ancillary, &mut rgba)?,
@@ -849,7 +821,7 @@ fn decode_grayscale_packed(
     raw: &[u8],
     ancillary: &AncillaryChunks,
     rgba: &mut Vec<u8>,
-) -> Result<(), PngDecodeError> {
+) -> Result<()> {
     let transparent = match ancillary.transparency {
         Some(Transparency::Grayscale(value)) => Some(value),
         _ => None,
@@ -929,11 +901,11 @@ fn decode_palette(
     raw: &[u8],
     ancillary: &AncillaryChunks,
     rgba: &mut Vec<u8>,
-) -> Result<(), PngDecodeError> {
+) -> Result<()> {
     let palette = ancillary
         .palette
         .as_ref()
-        .ok_or_else(|| PngDecodeError::InvalidChunk("missing PLTE for palette image".into()))?;
+        .ok_or_else(|| Error::InvalidData("missing PLTE for palette image".into()))?;
     let alpha = match ancillary.transparency.as_ref() {
         Some(Transparency::Palette(alpha)) => Some(alpha.as_slice()),
         _ => None,
@@ -942,7 +914,7 @@ fn decode_palette(
     for row in raw.chunks_exact(row_stride) {
         for index in unpack_samples(row, width as usize, header.bit_depth) {
             let Some(rgb) = palette.get(index as usize) else {
-                return Err(PngDecodeError::InvalidData(format!(
+                return Err(Error::InvalidData(format!(
                     "palette index out of range: {}",
                     index
                 )));
@@ -995,7 +967,7 @@ impl EncodedImage {
         height: u32,
         rgba: &[u8],
         encoding: PngEncoding,
-    ) -> Result<Self, PngEncodeError> {
+    ) -> Result<Self> {
         let pixels = rgba
             .chunks_exact(4)
             .map(|chunk| [chunk[0], chunk[1], chunk[2], chunk[3]])
@@ -1038,12 +1010,12 @@ enum EncodedPixelKind {
 }
 
 impl EncodingTarget {
-    fn analyze(pixels: &[[u8; 4]], encoding: PngEncoding) -> Result<Self, PngEncodeError> {
+    fn analyze(pixels: &[[u8; 4]], encoding: PngEncoding) -> Result<Self> {
         let effective_bit_depth = encoding.bit_depth.effective_for_rgba8();
         match encoding.color_mode {
             PngColorMode::Grayscale => {
                 if !pixels_are_opaque_grayscale(pixels) {
-                    return Err(PngEncodeError::Unsupported(
+                    return Err(Error::Unsupported(
                         "grayscale encoding requires opaque grayscale pixels".into(),
                     ));
                 }
@@ -1062,7 +1034,7 @@ impl EncodingTarget {
             }
             PngColorMode::GrayscaleAlpha => {
                 if !pixels_are_grayscale(pixels) {
-                    return Err(PngEncodeError::Unsupported(
+                    return Err(Error::Unsupported(
                         "grayscale+alpha encoding requires grayscale pixels".into(),
                     ));
                 }
@@ -1081,7 +1053,7 @@ impl EncodingTarget {
             }
             PngColorMode::Rgb => {
                 if !pixels_are_opaque(pixels) {
-                    return Err(PngEncodeError::Unsupported(
+                    return Err(Error::Unsupported(
                         "rgb encoding requires opaque pixels".into(),
                     ));
                 }
@@ -1114,7 +1086,7 @@ impl EncodingTarget {
             }
             PngColorMode::Indexed => {
                 let Some(indexed) = analyze_palette(pixels) else {
-                    return Err(PngEncodeError::Unsupported(
+                    return Err(Error::Unsupported(
                         "indexed encoding requires at most 256 distinct colors".into(),
                     ));
                 };
@@ -1194,11 +1166,11 @@ fn validate_exact_bit_depth(
     color_mode: PngColorMode,
     bit_depth: PngBitDepth,
     allowed: &[PngBitDepth],
-) -> Result<(), PngEncodeError> {
+) -> Result<()> {
     if allowed.contains(&bit_depth) {
         Ok(())
     } else {
-        Err(PngEncodeError::Unsupported(format!(
+        Err(Error::Unsupported(format!(
             "{color_mode:?} encoding does not support {}-bit output",
             bit_depth.as_u8()
         )))
@@ -1208,7 +1180,7 @@ fn validate_exact_bit_depth(
 fn validate_grayscale_bit_depth(
     pixels: &[[u8; 4]],
     bit_depth: PngBitDepth,
-) -> Result<(), PngEncodeError> {
+) -> Result<()> {
     validate_exact_bit_depth(
         PngColorMode::Grayscale,
         bit_depth,
@@ -1222,7 +1194,7 @@ fn validate_grayscale_bit_depth(
     if grayscale_pixels_fit_bit_depth(pixels, bit_depth) {
         Ok(())
     } else {
-        Err(PngEncodeError::Unsupported(format!(
+        Err(Error::Unsupported(format!(
             "grayscale pixels are not exactly representable at {}-bit",
             bit_depth.as_u8()
         )))
@@ -1241,7 +1213,7 @@ fn grayscale_pixels_fit_bit_depth(pixels: &[[u8; 4]], bit_depth: PngBitDepth) ->
     }
 }
 
-fn validate_indexed_bit_depth(size: usize, bit_depth: PngBitDepth) -> Result<(), PngEncodeError> {
+fn validate_indexed_bit_depth(size: usize, bit_depth: PngBitDepth) -> Result<()> {
     validate_exact_bit_depth(
         PngColorMode::Indexed,
         bit_depth,
@@ -1262,7 +1234,7 @@ fn validate_indexed_bit_depth(size: usize, bit_depth: PngBitDepth) -> Result<(),
     if size <= capacity {
         Ok(())
     } else {
-        Err(PngEncodeError::Unsupported(format!(
+        Err(Error::Unsupported(format!(
             "indexed palette of size {size} does not fit in {}-bit output",
             bit_depth.as_u8()
         )))
@@ -1325,7 +1297,7 @@ fn build_filtered_data(
     height: u32,
     pixels: &[[u8; 4]],
     target: &EncodingTarget,
-) -> Result<Vec<u8>, PngEncodeError> {
+) -> Result<Vec<u8>> {
     let mut filtered = Vec::new();
     for row in 0..height as usize {
         filtered.push(0);
@@ -1340,7 +1312,7 @@ fn build_adam7_filtered_data(
     height: u32,
     pixels: &[[u8; 4]],
     target: &EncodingTarget,
-) -> Result<Vec<u8>, PngEncodeError> {
+) -> Result<Vec<u8>> {
     let mut filtered = Vec::new();
     for pass in ADAM7_PASSES {
         let pass_width = adam7_axis_size(width, pass.x_start, pass.x_step);
@@ -1367,7 +1339,7 @@ fn encode_row_into(
     out: &mut Vec<u8>,
     row_pixels: &[[u8; 4]],
     target: &EncodingTarget,
-) -> Result<(), PngEncodeError> {
+) -> Result<()> {
     match target.pixel_kind {
         EncodedPixelKind::GrayscalePacked => {
             let samples = row_pixels
@@ -1407,10 +1379,10 @@ fn encode_row_into(
                         })
                         .map(|index| index as u8)
                         .ok_or_else(|| {
-                            PngEncodeError::InvalidData("pixel missing from indexed palette".into())
+                            Error::InvalidData("pixel missing from indexed palette".into())
                         })
                 })
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect::<core::result::Result<Vec<_>, _>>()?;
             pack_samples_to(out, &indices, target.bit_depth);
         }
     }
@@ -1454,18 +1426,18 @@ fn quantize_grayscale_sample(sample: u8, bit_depth: u8) -> u8 {
     }
 }
 
-fn packed_stride_for_width(header: &PngHeader, width: u32) -> Result<usize, PngDecodeError> {
+fn packed_stride_for_width(header: &PngHeader, width: u32) -> Result<usize> {
     (width as usize)
         .checked_mul(header.bits_per_pixel())
         .map(|bits| bits.div_ceil(8))
-        .ok_or_else(|| PngDecodeError::InvalidData("scanline stride overflow".into()))
+        .ok_or_else(|| Error::InvalidData("scanline stride overflow".into()))
 }
 
 fn decode_adam7_to_rgba(
     header: &PngHeader,
     filtered: &[u8],
     ancillary: &AncillaryChunks,
-) -> Result<Vec<u8>, PngDecodeError> {
+) -> Result<Vec<u8>> {
     let mut rgba = vec![0; header.width as usize * header.height as usize * 4];
     let mut offset = 0;
 
@@ -1479,10 +1451,10 @@ fn decode_adam7_to_rgba(
         let pass_stride = packed_stride_for_width(header, pass_width)?;
         let pass_filtered_len = (pass_stride + 1)
             .checked_mul(pass_height as usize)
-            .ok_or_else(|| PngDecodeError::InvalidData("Adam7 pass size overflow".into()))?;
+            .ok_or_else(|| Error::InvalidData("Adam7 pass size overflow".into()))?;
         let pass_filtered = filtered
             .get(offset..offset + pass_filtered_len)
-            .ok_or_else(|| PngDecodeError::InvalidData("truncated Adam7 data".into()))?;
+            .ok_or_else(|| Error::InvalidData("truncated Adam7 data".into()))?;
         offset += pass_filtered_len;
 
         let pass_raw = unfilter_scanlines(header, pass_width, pass_height, pass_filtered)?;
@@ -1498,7 +1470,7 @@ fn decode_adam7_to_rgba(
     }
 
     if offset != filtered.len() {
-        return Err(PngDecodeError::InvalidData(format!(
+        return Err(Error::InvalidData(format!(
             "unexpected Adam7 data size: consumed {}, got {}",
             offset,
             filtered.len()
@@ -1574,22 +1546,22 @@ impl<'a> Cursor<'a> {
         self.bytes.len().saturating_sub(self.offset)
     }
 
-    fn read_u32(&mut self) -> Result<u32, PngDecodeError> {
+    fn read_u32(&mut self) -> Result<u32> {
         Ok(u32::from_be_bytes(self.read_array::<4>()?))
     }
 
-    fn read_array<const N: usize>(&mut self) -> Result<[u8; N], PngDecodeError> {
+    fn read_array<const N: usize>(&mut self) -> Result<[u8; N]> {
         let bytes = self.read_bytes(N)?;
         Ok(bytes.try_into().unwrap())
     }
 
-    fn read_bytes(&mut self, len: usize) -> Result<&'a [u8], PngDecodeError> {
+    fn read_bytes(&mut self, len: usize) -> Result<&'a [u8]> {
         let end = self
             .offset
             .checked_add(len)
-            .ok_or_else(|| PngDecodeError::InvalidData("PNG chunk size overflow".into()))?;
+            .ok_or_else(|| Error::InvalidData("PNG chunk size overflow".into()))?;
         let Some(bytes) = self.bytes.get(self.offset..end) else {
-            return Err(PngDecodeError::InvalidData(
+            return Err(Error::InvalidData(
                 "unexpected end of PNG stream".into(),
             ));
         };

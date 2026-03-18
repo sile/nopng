@@ -1,4 +1,4 @@
-use nopng::{PngDecodeError, PngImage};
+use nopng::{Error, PngImage};
 
 #[test]
 fn decodes_grayscale_png() {
@@ -204,7 +204,7 @@ fn rejects_crc_mismatch() {
     bytes[index] ^= 0x01;
     let error = PngImage::from_bytes(&bytes).unwrap_err();
     assert!(
-        matches!(error, PngDecodeError::InvalidChunk(message) if message.contains("CRC mismatch"))
+        matches!(error, Error::InvalidData(message) if message.contains("CRC mismatch"))
     );
 }
 
@@ -215,7 +215,7 @@ fn rejects_missing_plte_for_palette_image() {
     remove_chunk(&mut bytes, b"tRNS");
     let error = PngImage::from_bytes(&bytes).unwrap_err();
     assert!(
-        matches!(error, PngDecodeError::InvalidChunk(message) if message.contains("missing PLTE"))
+        matches!(error, Error::InvalidData(message) if message.contains("missing PLTE"))
     );
 }
 
@@ -227,7 +227,7 @@ fn rejects_plte_after_idat() {
     );
     let error = PngImage::from_bytes(&bytes).unwrap_err();
     assert!(
-        matches!(error, PngDecodeError::InvalidChunk(message) if message.contains("PLTE appears after IDAT"))
+        matches!(error, Error::InvalidData(message) if message.contains("PLTE appears after IDAT"))
     );
 }
 
@@ -240,7 +240,7 @@ fn rejects_trns_longer_than_palette() {
     );
     let error = PngImage::from_bytes(&bytes).unwrap_err();
     assert!(
-        matches!(error, PngDecodeError::InvalidChunk(message) if message.contains("tRNS length exceeds palette length"))
+        matches!(error, Error::InvalidData(message) if message.contains("tRNS length exceeds palette length"))
     );
 }
 
@@ -253,7 +253,7 @@ fn rejects_palette_index_out_of_range() {
     );
     let error = PngImage::from_bytes(&bytes).unwrap_err();
     assert!(
-        matches!(error, PngDecodeError::InvalidData(message) if message.contains("palette index out of range"))
+        matches!(error, Error::InvalidData(message) if message.contains("palette index out of range"))
     );
 }
 
