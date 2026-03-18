@@ -2,6 +2,7 @@
 name = "nopng"
 version = "0.0.1"
 edition = "2024"
+rust-version = "1.94"
 authors = ["Takeru Ohta <phjgt308@gmail.com>"]
 license = "MIT"
 description = "A no-dependencies, no_std PNG library with no trait-based public API"

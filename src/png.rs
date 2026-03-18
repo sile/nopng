@@ -540,11 +540,16 @@ impl<'a> PngPixels<'a> {
                 .collect(),
             Self::Gray8(data) => data.to_vec(),
             Self::Gray16(data) => data.iter().copied().map(downsample_u16).collect(),
-            Self::GrayAlpha8(data) => data.chunks_exact(2).map(|chunk| chunk[0]).collect(),
-            Self::GrayAlpha16(data) => data
-                .chunks_exact(2)
-                .map(|chunk| downsample_u16(chunk[0]))
-                .collect(),
+            Self::GrayAlpha8(data) => {
+                let (pairs, remainder) = data.as_chunks::<2>();
+                debug_assert!(remainder.is_empty());
+                pairs.iter().map(|[gray, _]| *gray).collect()
+            }
+            Self::GrayAlpha16(data) => {
+                let (pairs, remainder) = data.as_chunks::<2>();
+                debug_assert!(remainder.is_empty());
+                pairs.iter().map(|[gray, _]| downsample_u16(*gray)).collect()
+            }
             Self::Rgb8(_)
             | Self::Rgb16(_)
             | Self::Rgba8(_)
@@ -554,8 +559,11 @@ impl<'a> PngPixels<'a> {
             | Self::Indexed4 { .. }
             | Self::Indexed8 { .. } => {
                 let rgba = self.to_rgba8_vec();
-                rgba.chunks_exact(4)
-                    .map(|chunk| rgb_to_gray8(chunk[0], chunk[1], chunk[2]))
+                let (pixels, remainder) = rgba.as_chunks::<4>();
+                debug_assert!(remainder.is_empty());
+                pixels
+                    .iter()
+                    .map(|[r, g, b, _]| rgb_to_gray8(*r, *g, *b))
                     .collect()
             }
         }
@@ -564,11 +572,18 @@ impl<'a> PngPixels<'a> {
     fn to_gray16_vec(&self) -> Vec<u16> {
         match self {
             Self::Gray16(data) => data.to_vec(),
-            Self::GrayAlpha16(data) => data.chunks_exact(2).map(|chunk| chunk[0]).collect(),
+            Self::GrayAlpha16(data) => {
+                let (pairs, remainder) = data.as_chunks::<2>();
+                debug_assert!(remainder.is_empty());
+                pairs.iter().map(|[gray, _]| *gray).collect()
+            }
             Self::Rgb16(_) | Self::Rgba16(_) => {
                 let rgba = self.to_rgba16_vec();
-                rgba.chunks_exact(4)
-                    .map(|chunk| rgb_to_gray16(chunk[0], chunk[1], chunk[2]))
+                let (pixels, remainder) = rgba.as_chunks::<4>();
+                debug_assert!(remainder.is_empty());
+                pixels
+                    .iter()
+                    .map(|[r, g, b, _]| rgb_to_gray16(*r, *g, *b))
                     .collect()
             }
             _ => self
@@ -597,28 +612,29 @@ impl<'a> PngPixels<'a> {
                 }
                 rgb
             }
-            Self::Rgba8(data) => data
-                .chunks_exact(4)
-                .flat_map(|chunk| [chunk[0], chunk[1], chunk[2]])
-                .collect(),
-            Self::Rgba16(data) => data
-                .chunks_exact(4)
-                .flat_map(|chunk| {
-                    [
-                        downsample_u16(chunk[0]),
-                        downsample_u16(chunk[1]),
-                        downsample_u16(chunk[2]),
-                    ]
-                })
-                .collect(),
+            Self::Rgba8(data) => {
+                let (pixels, remainder) = data.as_chunks::<4>();
+                debug_assert!(remainder.is_empty());
+                pixels.iter().flat_map(|[r, g, b, _]| [*r, *g, *b]).collect()
+            }
+            Self::Rgba16(data) => {
+                let (pixels, remainder) = data.as_chunks::<4>();
+                debug_assert!(remainder.is_empty());
+                pixels
+                    .iter()
+                    .flat_map(|[r, g, b, _]| {
+                        [downsample_u16(*r), downsample_u16(*g), downsample_u16(*b)]
+                    })
+                    .collect()
+            }
             Self::Indexed1 { .. }
             | Self::Indexed2 { .. }
             | Self::Indexed4 { .. }
             | Self::Indexed8 { .. } => {
                 let rgba = self.to_rgba8_vec();
-                rgba.chunks_exact(4)
-                    .flat_map(|chunk| [chunk[0], chunk[1], chunk[2]])
-                    .collect()
+                let (pixels, remainder) = rgba.as_chunks::<4>();
+                debug_assert!(remainder.is_empty());
+                pixels.iter().flat_map(|[r, g, b, _]| [*r, *g, *b]).collect()
             }
         }
     }
@@ -626,10 +642,11 @@ impl<'a> PngPixels<'a> {
     fn to_rgb16_vec(&self) -> Vec<u16> {
         match self {
             Self::Rgb16(data) => data.to_vec(),
-            Self::Rgba16(data) => data
-                .chunks_exact(4)
-                .flat_map(|chunk| [chunk[0], chunk[1], chunk[2]])
-                .collect(),
+            Self::Rgba16(data) => {
+                let (pixels, remainder) = data.as_chunks::<4>();
+                debug_assert!(remainder.is_empty());
+                pixels.iter().flat_map(|[r, g, b, _]| [*r, *g, *b]).collect()
+            }
             _ => self
                 .to_rgb8_vec()
                 .into_iter()
@@ -644,18 +661,22 @@ impl<'a> PngPixels<'a> {
             Self::Rgba16(data) => data.iter().copied().map(downsample_u16).collect(),
             Self::Rgb8(data) => {
                 let mut rgba = Vec::with_capacity(data.len() / 3 * 4);
-                for chunk in data.chunks_exact(3) {
-                    rgba.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 255]);
+                let (pixels, remainder) = data.as_chunks::<3>();
+                debug_assert!(remainder.is_empty());
+                for &[r, g, b] in pixels {
+                    rgba.extend_from_slice(&[r, g, b, 255]);
                 }
                 rgba
             }
             Self::Rgb16(data) => {
                 let mut rgba = Vec::with_capacity(data.len() / 3 * 4);
-                for chunk in data.chunks_exact(3) {
+                let (pixels, remainder) = data.as_chunks::<3>();
+                debug_assert!(remainder.is_empty());
+                for &[r, g, b] in pixels {
                     rgba.extend_from_slice(&[
-                        downsample_u16(chunk[0]),
-                        downsample_u16(chunk[1]),
-                        downsample_u16(chunk[2]),
+                        downsample_u16(r),
+                        downsample_u16(g),
+                        downsample_u16(b),
                         255,
                     ]);
                 }
@@ -671,16 +692,20 @@ impl<'a> PngPixels<'a> {
             }
             Self::GrayAlpha8(data) => {
                 let mut rgba = Vec::with_capacity(data.len() / 2 * 4);
-                for chunk in data.chunks_exact(2) {
-                    rgba.extend_from_slice(&[chunk[0], chunk[0], chunk[0], chunk[1]]);
+                let (pixels, remainder) = data.as_chunks::<2>();
+                debug_assert!(remainder.is_empty());
+                for &[gray, alpha] in pixels {
+                    rgba.extend_from_slice(&[gray, gray, gray, alpha]);
                 }
                 rgba
             }
             Self::GrayAlpha16(data) => {
                 let mut rgba = Vec::with_capacity(data.len() / 2 * 4);
-                for chunk in data.chunks_exact(2) {
-                    let gray = downsample_u16(chunk[0]);
-                    let alpha = downsample_u16(chunk[1]);
+                let (pixels, remainder) = data.as_chunks::<2>();
+                debug_assert!(remainder.is_empty());
+                for &[gray, alpha] in pixels {
+                    let gray = downsample_u16(gray);
+                    let alpha = downsample_u16(alpha);
                     rgba.extend_from_slice(&[gray, gray, gray, alpha]);
                 }
                 rgba
@@ -697,8 +722,10 @@ impl<'a> PngPixels<'a> {
             Self::Rgba16(data) => data.to_vec(),
             Self::Rgb16(data) => {
                 let mut rgba = Vec::with_capacity(data.len() / 3 * 4);
-                for chunk in data.chunks_exact(3) {
-                    rgba.extend_from_slice(&[chunk[0], chunk[1], chunk[2], u16::MAX]);
+                let (pixels, remainder) = data.as_chunks::<3>();
+                debug_assert!(remainder.is_empty());
+                for &[r, g, b] in pixels {
+                    rgba.extend_from_slice(&[r, g, b, u16::MAX]);
                 }
                 rgba
             }
@@ -711,8 +738,10 @@ impl<'a> PngPixels<'a> {
             }
             Self::GrayAlpha16(data) => {
                 let mut rgba = Vec::with_capacity(data.len() / 2 * 4);
-                for chunk in data.chunks_exact(2) {
-                    rgba.extend_from_slice(&[chunk[0], chunk[0], chunk[0], chunk[1]]);
+                let (pixels, remainder) = data.as_chunks::<2>();
+                debug_assert!(remainder.is_empty());
+                for &[gray, alpha] in pixels {
+                    rgba.extend_from_slice(&[gray, gray, gray, alpha]);
                 }
                 rgba
             }
@@ -995,8 +1024,16 @@ impl PngHeader {
                 "IHDR chunk must contain 13 bytes".into(),
             ));
         }
-        let width = u32::from_be_bytes(chunk_data[0..4].try_into().unwrap());
-        let height = u32::from_be_bytes(chunk_data[4..8].try_into().unwrap());
+        let width = u32::from_be_bytes(
+            chunk_data[0..4]
+                .try_into()
+                .expect("BUF: IHDR width must be 4 bytes"),
+        );
+        let height = u32::from_be_bytes(
+            chunk_data[4..8]
+                .try_into()
+                .expect("BUF: IHDR height must be 4 bytes"),
+        );
         if width == 0 || height == 0 {
             return Err(Error::InvalidData(
                 "image dimensions must be non-zero".into(),
@@ -1163,10 +1200,9 @@ fn parse_palette(chunk_data: &[u8], color_type: u8) -> Result<Vec<[u8; 3]>> {
             "PLTE length must be a non-zero multiple of 3".into(),
         ));
     }
-    let palette = chunk_data
-        .chunks_exact(3)
-        .map(|chunk| [chunk[0], chunk[1], chunk[2]])
-        .collect::<Vec<_>>();
+    let (palette_chunks, remainder) = chunk_data.as_chunks::<3>();
+    debug_assert!(remainder.is_empty());
+    let palette = palette_chunks.to_vec();
     if palette.len() > 256 {
         return Err(Error::InvalidData(
             "PLTE must not contain more than 256 entries".into(),
@@ -1341,7 +1377,11 @@ fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>> {
     let deflate_bytes = &data[2..data.len() - 4];
     let decoded = deflate::decompress(deflate_bytes)
         .map_err(|error| Error::InvalidData(format!("invalid deflate stream: {error}")))?;
-    let expected_adler = u32::from_be_bytes(data[data.len() - 4..].try_into().unwrap());
+    let expected_adler = u32::from_be_bytes(
+        data[data.len() - 4..]
+            .try_into()
+            .expect("BUF: zlib trailer must be 4 bytes"),
+    );
     let actual_adler = adler32::calculate(&decoded);
     if actual_adler != expected_adler {
         return Err(Error::InvalidData("zlib adler32 checksum mismatch".into()));
@@ -1400,8 +1440,10 @@ fn convert_to_pixels(
                 _ => None,
             };
             let samples = raw
-                .chunks_exact(2)
-                .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|chunk| u16::from_be_bytes(*chunk))
                 .collect::<Vec<_>>();
             if let Some(transparent) = transparent {
                 let mut data = Vec::with_capacity(samples.len() * 2);
@@ -1420,18 +1462,20 @@ fn convert_to_pixels(
             };
             if let Some(transparent) = transparent {
                 let mut data = Vec::with_capacity(raw.len() / 3 * 4);
-                for chunk in raw.chunks_exact(3) {
+                let (pixels, remainder) = raw.as_chunks::<3>();
+                debug_assert!(remainder.is_empty());
+                for &[r, g, b] in pixels {
                     let alpha = if [
-                        u16::from(chunk[0]),
-                        u16::from(chunk[1]),
-                        u16::from(chunk[2]),
+                        u16::from(r),
+                        u16::from(g),
+                        u16::from(b),
                     ] == transparent
                     {
                         0
                     } else {
                         255
                     };
-                    data.extend_from_slice(&[chunk[0], chunk[1], chunk[2], alpha]);
+                    data.extend_from_slice(&[r, g, b, alpha]);
                 }
                 Ok(PngPixels::Rgba8(Cow::Owned(data)))
             } else {
@@ -1444,18 +1488,22 @@ fn convert_to_pixels(
                 _ => None,
             };
             let samples = raw
-                .chunks_exact(2)
-                .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|chunk| u16::from_be_bytes(*chunk))
                 .collect::<Vec<_>>();
             if let Some(transparent) = transparent {
                 let mut data = Vec::with_capacity(samples.len() / 3 * 4);
-                for chunk in samples.chunks_exact(3) {
-                    let alpha = if [chunk[0], chunk[1], chunk[2]] == transparent {
+                let (pixels, remainder) = samples.as_chunks::<3>();
+                debug_assert!(remainder.is_empty());
+                for &[r, g, b] in pixels {
+                    let alpha = if [r, g, b] == transparent {
                         0
                     } else {
                         u16::MAX
                     };
-                    data.extend_from_slice(&[chunk[0], chunk[1], chunk[2], alpha]);
+                    data.extend_from_slice(&[r, g, b, alpha]);
                 }
                 Ok(PngPixels::Rgba16(Cow::Owned(data)))
             } else {
@@ -1465,14 +1513,18 @@ fn convert_to_pixels(
         (3, 1 | 2 | 4 | 8) => convert_indexed_to_pixels(header, width, raw, ancillary),
         (4, 8) => Ok(PngPixels::GrayAlpha8(Cow::Owned(raw.to_vec()))),
         (4, 16) => Ok(PngPixels::GrayAlpha16(Cow::Owned(
-            raw.chunks_exact(2)
-                .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+            raw.as_chunks::<2>()
+                .0
+                .iter()
+                .map(|chunk| u16::from_be_bytes(*chunk))
                 .collect(),
         ))),
         (6, 8) => Ok(PngPixels::Rgba8(Cow::Owned(raw.to_vec()))),
         (6, 16) => Ok(PngPixels::Rgba16(Cow::Owned(
-            raw.chunks_exact(2)
-                .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+            raw.as_chunks::<2>()
+                .0
+                .iter()
+                .map(|chunk| u16::from_be_bytes(*chunk))
                 .collect(),
         ))),
         _ => unreachable!(),
@@ -1724,8 +1776,10 @@ fn convert_to_rgba16(
                 Some(Transparency::Grayscale(value)) => Some(value),
                 _ => None,
             };
-            for chunk in raw.chunks_exact(2) {
-                let gray = u16::from_be_bytes([chunk[0], chunk[1]]);
+            let (pixels, remainder) = raw.as_chunks::<2>();
+            debug_assert!(remainder.is_empty());
+            for chunk in pixels {
+                let gray = u16::from_be_bytes(*chunk);
                 let alpha = if Some(gray) == transparent {
                     0
                 } else {
@@ -1739,11 +1793,13 @@ fn convert_to_rgba16(
                 Some(Transparency::Truecolor(value)) => Some(value),
                 _ => None,
             };
-            for chunk in raw.chunks_exact(3) {
+            let (pixels, remainder) = raw.as_chunks::<3>();
+            debug_assert!(remainder.is_empty());
+            for &[r, g, b] in pixels {
                 let rgb = [
-                    u16::from(chunk[0]),
-                    u16::from(chunk[1]),
-                    u16::from(chunk[2]),
+                    u16::from(r),
+                    u16::from(g),
+                    u16::from(b),
                 ];
                 let alpha = if Some(rgb) == transparent {
                     0
@@ -1751,9 +1807,9 @@ fn convert_to_rgba16(
                     u16::MAX
                 };
                 rgba.extend_from_slice(&[
-                    upscale_u8_to_u16(chunk[0]),
-                    upscale_u8_to_u16(chunk[1]),
-                    upscale_u8_to_u16(chunk[2]),
+                    upscale_u8_to_u16(r),
+                    upscale_u8_to_u16(g),
+                    upscale_u8_to_u16(b),
                     alpha,
                 ]);
             }
@@ -1763,11 +1819,13 @@ fn convert_to_rgba16(
                 Some(Transparency::Truecolor(value)) => Some(value),
                 _ => None,
             };
-            for chunk in raw.chunks_exact(6) {
+            let (pixels, remainder) = raw.as_chunks::<6>();
+            debug_assert!(remainder.is_empty());
+            for &[r0, r1, g0, g1, b0, b1] in pixels {
                 let rgb = [
-                    u16::from_be_bytes([chunk[0], chunk[1]]),
-                    u16::from_be_bytes([chunk[2], chunk[3]]),
-                    u16::from_be_bytes([chunk[4], chunk[5]]),
+                    u16::from_be_bytes([r0, r1]),
+                    u16::from_be_bytes([g0, g1]),
+                    u16::from_be_bytes([b0, b1]),
                 ];
                 let alpha = if Some(rgb) == transparent {
                     0
@@ -1782,36 +1840,44 @@ fn convert_to_rgba16(
             rgba.extend(palette_pixels.to_rgba16_vec());
         }
         (4, 8) => {
-            for chunk in raw.chunks_exact(2) {
-                let gray = upscale_u8_to_u16(chunk[0]);
-                let alpha = upscale_u8_to_u16(chunk[1]);
+            let (pixels, remainder) = raw.as_chunks::<2>();
+            debug_assert!(remainder.is_empty());
+            for &[gray, alpha] in pixels {
+                let gray = upscale_u8_to_u16(gray);
+                let alpha = upscale_u8_to_u16(alpha);
                 rgba.extend_from_slice(&[gray, gray, gray, alpha]);
             }
         }
         (4, 16) => {
-            for chunk in raw.chunks_exact(4) {
-                let gray = u16::from_be_bytes([chunk[0], chunk[1]]);
-                let alpha = u16::from_be_bytes([chunk[2], chunk[3]]);
+            let (pixels, remainder) = raw.as_chunks::<4>();
+            debug_assert!(remainder.is_empty());
+            for &[g0, g1, a0, a1] in pixels {
+                let gray = u16::from_be_bytes([g0, g1]);
+                let alpha = u16::from_be_bytes([a0, a1]);
                 rgba.extend_from_slice(&[gray, gray, gray, alpha]);
             }
         }
         (6, 8) => {
-            for chunk in raw.chunks_exact(4) {
+            let (pixels, remainder) = raw.as_chunks::<4>();
+            debug_assert!(remainder.is_empty());
+            for &[r, g, b, a] in pixels {
                 rgba.extend_from_slice(&[
-                    upscale_u8_to_u16(chunk[0]),
-                    upscale_u8_to_u16(chunk[1]),
-                    upscale_u8_to_u16(chunk[2]),
-                    upscale_u8_to_u16(chunk[3]),
+                    upscale_u8_to_u16(r),
+                    upscale_u8_to_u16(g),
+                    upscale_u8_to_u16(b),
+                    upscale_u8_to_u16(a),
                 ]);
             }
         }
         (6, 16) => {
-            for chunk in raw.chunks_exact(8) {
+            let (pixels, remainder) = raw.as_chunks::<8>();
+            debug_assert!(remainder.is_empty());
+            for &[r0, r1, g0, g1, b0, b1, a0, a1] in pixels {
                 rgba.extend_from_slice(&[
-                    u16::from_be_bytes([chunk[0], chunk[1]]),
-                    u16::from_be_bytes([chunk[2], chunk[3]]),
-                    u16::from_be_bytes([chunk[4], chunk[5]]),
-                    u16::from_be_bytes([chunk[6], chunk[7]]),
+                    u16::from_be_bytes([r0, r1]),
+                    u16::from_be_bytes([g0, g1]),
+                    u16::from_be_bytes([b0, b1]),
+                    u16::from_be_bytes([a0, a1]),
                 ]);
             }
         }
@@ -1838,31 +1904,36 @@ fn pixels_from_rgba16_source(
         ancillary.transparency.is_some(),
     ) {
         (0, 16, false) => {
-            let data = rgba
-                .chunks_exact(4)
-                .map(|chunk| chunk[0])
-                .collect::<Vec<_>>();
+            let (pixels, remainder) = rgba.as_chunks::<4>();
+            debug_assert!(remainder.is_empty());
+            let data = pixels.iter().map(|[gray, _, _, _]| *gray).collect::<Vec<_>>();
             PngPixels::Gray16(Cow::Owned(data))
         }
         (0, _, true) => {
             if header.bit_depth == 16 {
                 let mut data = Vec::with_capacity(rgba.len() / 2);
-                for chunk in rgba.chunks_exact(4) {
-                    data.extend_from_slice(&[chunk[0], chunk[3]]);
+                let (pixels, remainder) = rgba.as_chunks::<4>();
+                debug_assert!(remainder.is_empty());
+                for &[gray, _, _, alpha] in pixels {
+                    data.extend_from_slice(&[gray, alpha]);
                 }
                 PngPixels::GrayAlpha16(Cow::Owned(data))
             } else {
                 let mut data = Vec::with_capacity(rgba.len() / 2);
-                for chunk in rgba.chunks_exact(4) {
-                    data.extend_from_slice(&[downsample_u16(chunk[0]), downsample_u16(chunk[3])]);
+                let (pixels, remainder) = rgba.as_chunks::<4>();
+                debug_assert!(remainder.is_empty());
+                for &[gray, _, _, alpha] in pixels {
+                    data.extend_from_slice(&[downsample_u16(gray), downsample_u16(alpha)]);
                 }
                 PngPixels::GrayAlpha8(Cow::Owned(data))
             }
         }
         (2, 16, false) => {
-            let data = rgba
-                .chunks_exact(4)
-                .flat_map(|chunk| [chunk[0], chunk[1], chunk[2]])
+            let (pixels, remainder) = rgba.as_chunks::<4>();
+            debug_assert!(remainder.is_empty());
+            let data = pixels
+                .iter()
+                .flat_map(|[r, g, b, _]| [*r, *g, *b])
                 .collect::<Vec<_>>();
             PngPixels::Rgb16(Cow::Owned(data))
         }
@@ -1877,15 +1948,19 @@ fn pixels_from_rgba16_source(
         }
         (4, 8, _) => {
             let mut data = Vec::with_capacity(rgba.len() / 2);
-            for chunk in rgba.chunks_exact(4) {
-                data.extend_from_slice(&[downsample_u16(chunk[0]), downsample_u16(chunk[3])]);
+            let (pixels, remainder) = rgba.as_chunks::<4>();
+            debug_assert!(remainder.is_empty());
+            for &[gray, _, _, alpha] in pixels {
+                data.extend_from_slice(&[downsample_u16(gray), downsample_u16(alpha)]);
             }
             PngPixels::GrayAlpha8(Cow::Owned(data))
         }
         (4, 16, _) => {
             let mut data = Vec::with_capacity(rgba.len() / 2);
-            for chunk in rgba.chunks_exact(4) {
-                data.extend_from_slice(&[chunk[0], chunk[3]]);
+            let (pixels, remainder) = rgba.as_chunks::<4>();
+            debug_assert!(remainder.is_empty());
+            for &[gray, _, _, alpha] in pixels {
+                data.extend_from_slice(&[gray, alpha]);
             }
             PngPixels::GrayAlpha16(Cow::Owned(data))
         }
@@ -1894,9 +1969,11 @@ fn pixels_from_rgba16_source(
         )),
         (6, 16, _) => PngPixels::Rgba16(Cow::Owned(rgba.to_vec())),
         _ => {
-            let data = rgba
-                .chunks_exact(4)
-                .map(|chunk| downsample_u16(chunk[0]))
+            let (pixels, remainder) = rgba.as_chunks::<4>();
+            debug_assert!(remainder.is_empty());
+            let data = pixels
+                .iter()
+                .map(|[gray, _, _, _]| downsample_u16(*gray))
                 .collect::<Vec<_>>();
             match header.bit_depth {
                 1 => PngPixels::Gray1(Cow::Owned(
@@ -1967,10 +2044,9 @@ impl EncodedImage {
     }
 
     fn from_rgba(width: u32, height: u32, rgba: &[u8], encoding: PngEncoding) -> Result<Self> {
-        let pixels = rgba
-            .chunks_exact(4)
-            .map(|chunk| [chunk[0], chunk[1], chunk[2], chunk[3]])
-            .collect::<Vec<_>>();
+        let (pixels, remainder) = rgba.as_chunks::<4>();
+        debug_assert!(remainder.is_empty());
+        let pixels = pixels.to_vec();
         let target = EncodingTarget::analyze(&pixels, encoding)?;
         let interlace_method = u8::from(encoding.interlaced);
         let filtered_data = if encoding.interlaced {
@@ -1989,10 +2065,9 @@ impl EncodedImage {
     }
 
     fn from_rgba16(width: u32, height: u32, rgba: &[u16], encoding: PngEncoding) -> Result<Self> {
-        let pixels = rgba
-            .chunks_exact(4)
-            .map(|chunk| [chunk[0], chunk[1], chunk[2], chunk[3]])
-            .collect::<Vec<_>>();
+        let (pixels, remainder) = rgba.as_chunks::<4>();
+        debug_assert!(remainder.is_empty());
+        let pixels = pixels.to_vec();
         let target = EncodingTarget16::analyze(&pixels, encoding)?;
         let interlace_method = u8::from(encoding.interlaced);
         let filtered_data = if encoding.interlaced {
