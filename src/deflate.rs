@@ -1,8 +1,12 @@
 use std::cmp;
+use std::collections::BinaryHeap;
 use std::io::Write;
 
 const MAX_BITS: usize = 15;
 const END_OF_BLOCK: u16 = 256;
+const WINDOW_SIZE: usize = 32_768;
+const MAX_MATCH: usize = 258;
+const MIN_MATCH: usize = 3;
 const BITWIDTH_CODE_ORDER: [usize; 19] = [
     16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
 ];
@@ -90,29 +94,13 @@ impl std::error::Error for Error {}
 type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug)]
-pub struct DeflateNoCompressionEncoder;
+pub struct DeflateDynamicEncoder;
 
-impl DeflateNoCompressionEncoder {
+impl DeflateDynamicEncoder {
     pub fn encode<W: Write>(&mut self, writer: &mut W, data: &[u8]) -> std::io::Result<()> {
-        let mut remaining = data.len();
-        let mut offset = 0;
-
-        while remaining > 0 {
-            let size = std::cmp::min(remaining, 0xFFFF);
-            let is_final = size == remaining;
-            let header_byte = if is_final { 0b0000_0001 } else { 0b0000_0000 };
-            writer.write_all(&[header_byte])?;
-
-            let len = (size as u16).to_le_bytes();
-            let nlen = (!size as u16).to_le_bytes();
-            writer.write_all(&len)?;
-            writer.write_all(&nlen)?;
-            writer.write_all(&data[offset..offset + size])?;
-
-            offset += size;
-            remaining -= size;
-        }
-
+        let encoded = encode_dynamic_literals(data)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        writer.write_all(&encoded)?;
         writer.flush()
     }
 }
@@ -306,6 +294,136 @@ fn fixed_distance_decoder() -> Result<HuffmanDecoder> {
     HuffmanDecoder::from_code_lengths(&[5u8; 30], Some(7), None)
 }
 
+fn encode_dynamic_literals(input: &[u8]) -> Result<Vec<u8>> {
+    let symbols = lz77_symbols(input);
+    let mut literal_frequencies = [0usize; 286];
+    let mut distance_frequencies = [0usize; 30];
+    let mut has_distance = false;
+    for symbol in &symbols {
+        literal_frequencies[symbol.code() as usize] += 1;
+        if let Some((code, _, _)) = symbol.distance() {
+            distance_frequencies[code as usize] += 1;
+            has_distance = true;
+        }
+    }
+    literal_frequencies[END_OF_BLOCK as usize] = 1;
+
+    // Windows reportedly dislikes an empty distance table; emit a dummy symbol.
+    if !has_distance {
+        distance_frequencies[0] = 1;
+    }
+
+    let literal_lengths = length_limited_code_lengths(&literal_frequencies, MAX_BITS as u8);
+    let distance_lengths = length_limited_code_lengths(&distance_frequencies, MAX_BITS as u8);
+    let literal_encoder = HuffmanEncoder::from_code_lengths(&literal_lengths)?;
+    let distance_encoder = HuffmanEncoder::from_code_lengths(&distance_lengths)?;
+
+    let literal_code_count = cmp::max(
+        257,
+        literal_encoder.used_max_symbol().unwrap_or(0) as usize + 1,
+    );
+    let distance_code_count = cmp::max(
+        1,
+        distance_encoder.used_max_symbol().unwrap_or(0) as usize + 1,
+    );
+
+    let bitwidth_codes = build_bitwidth_codes(
+        &literal_encoder,
+        literal_code_count,
+        &distance_encoder,
+        distance_code_count,
+    );
+    let mut bitwidth_frequencies = [0usize; 19];
+    for &(code, _, _) in &bitwidth_codes {
+        bitwidth_frequencies[code as usize] += 1;
+    }
+    let bitwidth_lengths = length_limited_code_lengths(&bitwidth_frequencies, 7);
+    let bitwidth_encoder = HuffmanEncoder::from_code_lengths(&bitwidth_lengths)?;
+    let bitwidth_code_count = cmp::max(
+        4,
+        BITWIDTH_CODE_ORDER
+            .iter()
+            .rposition(|&index| bitwidth_encoder.code_width(index as u16) > 0)
+            .map_or(0, |index| index + 1),
+    );
+
+    let mut writer = BitWriter::new();
+    writer.write_bit(true);
+    writer.write_bits(2, 0b10);
+    writer.write_bits(5, (literal_code_count - 257) as u16);
+    writer.write_bits(5, (distance_code_count - 1) as u16);
+    writer.write_bits(4, (bitwidth_code_count - 4) as u16);
+    for &index in BITWIDTH_CODE_ORDER.iter().take(bitwidth_code_count) {
+        writer.write_bits(3, bitwidth_encoder.code_width(index as u16) as u16);
+    }
+    for &(code, extra_bits, extra) in &bitwidth_codes {
+        bitwidth_encoder.encode(&mut writer, code as u16);
+        if extra_bits > 0 {
+            writer.write_bits(extra_bits, extra as u16);
+        }
+    }
+
+    for symbol in &symbols {
+        literal_encoder.encode(&mut writer, symbol.code());
+        if let Some((bits, extra)) = symbol.extra_length() {
+            writer.write_bits(bits, extra);
+        }
+        if let Some((code, bits, extra)) = symbol.distance() {
+            distance_encoder.encode(&mut writer, code as u16);
+            if bits > 0 {
+                writer.write_bits(bits, extra);
+            }
+        }
+    }
+    literal_encoder.encode(&mut writer, END_OF_BLOCK);
+    Ok(writer.finish())
+}
+
+fn lz77_symbols(input: &[u8]) -> Vec<DeflateSymbol> {
+    let mut symbols = Vec::new();
+    let mut cursor = 0;
+    while cursor < input.len() {
+        if let Some((distance, length)) = find_match(input, cursor) {
+            symbols.push(DeflateSymbol::Pointer { length, distance });
+            cursor += length;
+        } else {
+            symbols.push(DeflateSymbol::Literal(input[cursor]));
+            cursor += 1;
+        }
+    }
+    symbols
+}
+
+fn find_match(input: &[u8], cursor: usize) -> Option<(usize, usize)> {
+    if cursor + MIN_MATCH > input.len() {
+        return None;
+    }
+
+    let search_start = cursor.saturating_sub(WINDOW_SIZE);
+    let max_length = (input.len() - cursor).min(MAX_MATCH);
+    let mut best_distance = 0;
+    let mut best_length = 0;
+
+    for candidate in search_start..cursor {
+        if input[candidate] != input[cursor] {
+            continue;
+        }
+        let mut length = 1;
+        while length < max_length && input[candidate + length] == input[cursor + length] {
+            length += 1;
+        }
+        if length >= MIN_MATCH && length > best_length {
+            best_length = length;
+            best_distance = cursor - candidate;
+            if length == max_length {
+                break;
+            }
+        }
+    }
+
+    (best_length >= MIN_MATCH).then_some((best_distance, best_length))
+}
+
 fn reverse_bits(bits: u16, width: u8) -> u16 {
     let mut from = bits;
     let mut to = 0;
@@ -315,6 +433,318 @@ fn reverse_bits(bits: u16, width: u8) -> u16 {
         from >>= 1;
     }
     to
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HuffmanCode {
+    width: u8,
+    bits: u16,
+}
+
+impl HuffmanCode {
+    const EMPTY: Self = Self { width: 0, bits: 0 };
+}
+
+#[derive(Debug, Clone)]
+struct HuffmanEncoder {
+    codes: Vec<HuffmanCode>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeflateSymbol {
+    Literal(u8),
+    Pointer { length: usize, distance: usize },
+}
+
+impl DeflateSymbol {
+    fn code(self) -> u16 {
+        match self {
+            DeflateSymbol::Literal(byte) => u16::from(byte),
+            DeflateSymbol::Pointer { length, .. } => length_to_symbol(length as u16).code,
+        }
+    }
+
+    fn extra_length(self) -> Option<(u8, u16)> {
+        match self {
+            DeflateSymbol::Literal(_) => None,
+            DeflateSymbol::Pointer { length, .. } => length_to_symbol(length as u16).extra,
+        }
+    }
+
+    fn distance(self) -> Option<(u8, u8, u16)> {
+        match self {
+            DeflateSymbol::Literal(_) => None,
+            DeflateSymbol::Pointer { distance, .. } => {
+                let symbol = distance_to_symbol(distance as u16);
+                Some((
+                    symbol.code as u8,
+                    symbol.extra.map_or(0, |(bits, _)| bits),
+                    symbol.extra.map_or(0, |(_, extra)| extra),
+                ))
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LengthSymbol {
+    code: u16,
+    extra: Option<(u8, u16)>,
+}
+
+fn length_to_symbol(length: u16) -> LengthSymbol {
+    for (index, &(base, extra_bits)) in LENGTH_TABLE.iter().enumerate() {
+        let span = if extra_bits == 0 {
+            1
+        } else {
+            1u16 << extra_bits
+        };
+        let max = if index == LENGTH_TABLE.len() - 1 {
+            base
+        } else {
+            base + span - 1
+        };
+        if (base..=max).contains(&length) {
+            return LengthSymbol {
+                code: 257 + index as u16,
+                extra: (extra_bits > 0).then_some((extra_bits, length - base)),
+            };
+        }
+    }
+    unreachable!("invalid length: {length}");
+}
+
+fn distance_to_symbol(distance: u16) -> LengthSymbol {
+    for (index, &(base, extra_bits)) in DISTANCE_TABLE.iter().enumerate() {
+        let span = if extra_bits == 0 {
+            1
+        } else {
+            1u16 << extra_bits
+        };
+        let max = base + span - 1;
+        if (base..=max).contains(&distance) {
+            return LengthSymbol {
+                code: index as u16,
+                extra: (extra_bits > 0).then_some((extra_bits, distance - base)),
+            };
+        }
+    }
+    unreachable!("invalid distance: {distance}");
+}
+
+impl HuffmanEncoder {
+    fn from_code_lengths(lengths: &[u8]) -> Result<Self> {
+        let mut codes = vec![HuffmanCode::EMPTY; lengths.len()];
+        let mut symbols = lengths
+            .iter()
+            .enumerate()
+            .filter(|(_, width)| **width > 0)
+            .map(|(symbol, width)| (symbol as u16, *width))
+            .collect::<Vec<_>>();
+        symbols.sort_by_key(|entry| entry.1);
+
+        let mut code = 0u16;
+        let mut previous_width = 0u8;
+        for (symbol, width) in symbols {
+            code <<= width - previous_width;
+            codes[symbol as usize] = HuffmanCode {
+                width,
+                bits: reverse_bits(code, width),
+            };
+            code += 1;
+            previous_width = width;
+        }
+        Ok(Self { codes })
+    }
+
+    fn encode(&self, writer: &mut BitWriter, symbol: u16) {
+        let code = self.codes[symbol as usize];
+        writer.write_bits(code.width, code.bits);
+    }
+
+    fn code_width(&self, symbol: u16) -> u8 {
+        self.codes.get(symbol as usize).map_or(0, |code| code.width)
+    }
+
+    fn used_max_symbol(&self) -> Option<u16> {
+        self.codes
+            .iter()
+            .rposition(|code| code.width > 0)
+            .map(|index| index as u16)
+    }
+}
+
+fn build_bitwidth_codes(
+    literal: &HuffmanEncoder,
+    literal_code_count: usize,
+    distance: &HuffmanEncoder,
+    distance_code_count: usize,
+) -> Vec<(u8, u8, u8)> {
+    #[derive(Debug)]
+    struct RunLength {
+        value: u8,
+        count: usize,
+    }
+
+    let mut run_lengths = Vec::<RunLength>::new();
+    for width in (0..literal_code_count)
+        .map(|symbol| literal.code_width(symbol as u16))
+        .chain((0..distance_code_count).map(|symbol| distance.code_width(symbol as u16)))
+    {
+        if run_lengths.last().is_some_and(|run| run.value == width) {
+            run_lengths.last_mut().unwrap().count += 1;
+        } else {
+            run_lengths.push(RunLength {
+                value: width,
+                count: 1,
+            });
+        }
+    }
+
+    let mut codes = Vec::new();
+    for run in run_lengths {
+        if run.value == 0 {
+            let mut count = run.count;
+            while count >= 11 {
+                let amount = cmp::min(138, count) as u8;
+                codes.push((18, 7, amount - 11));
+                count -= amount as usize;
+            }
+            if count >= 3 {
+                codes.push((17, 3, count as u8 - 3));
+                count = 0;
+            }
+            for _ in 0..count {
+                codes.push((0, 0, 0));
+            }
+        } else {
+            codes.push((run.value, 0, 0));
+            let mut count = run.count - 1;
+            while count >= 3 {
+                let amount = cmp::min(6, count) as u8;
+                codes.push((16, 2, amount - 3));
+                count -= amount as usize;
+            }
+            for _ in 0..count {
+                codes.push((run.value, 0, 0));
+            }
+        }
+    }
+    codes
+}
+
+fn length_limited_code_lengths(frequencies: &[usize], max_bitwidth: u8) -> Vec<u8> {
+    let max_bitwidth = cmp::min(
+        max_bitwidth,
+        ordinary_huffman_optimal_max_bitwidth(frequencies),
+    );
+    package_merge_code_lengths(frequencies, max_bitwidth)
+}
+
+fn ordinary_huffman_optimal_max_bitwidth(frequencies: &[usize]) -> u8 {
+    let mut heap = BinaryHeap::new();
+    for &frequency in frequencies.iter().filter(|&&value| value > 0) {
+        heap.push((-(frequency as isize), 0u8));
+    }
+    while heap.len() > 1 {
+        let (weight1, width1) = heap.pop().unwrap();
+        let (weight2, width2) = heap.pop().unwrap();
+        heap.push((weight1 + weight2, 1 + cmp::max(width1, width2)));
+    }
+    cmp::max(1, heap.pop().map_or(0, |(_, width)| width))
+}
+
+fn package_merge_code_lengths(frequencies: &[usize], max_bitwidth: u8) -> Vec<u8> {
+    #[derive(Debug, Clone)]
+    struct Node {
+        symbols: Vec<u16>,
+        weight: usize,
+    }
+
+    impl Node {
+        fn empty() -> Self {
+            Self {
+                symbols: Vec::new(),
+                weight: 0,
+            }
+        }
+
+        fn single(symbol: u16, weight: usize) -> Self {
+            Self {
+                symbols: vec![symbol],
+                weight,
+            }
+        }
+
+        fn merge(&mut self, other: Self) {
+            self.weight += other.weight;
+            self.symbols.extend(other.symbols);
+        }
+    }
+
+    fn merge_nodes(left: Vec<Node>, right: Vec<Node>) -> Vec<Node> {
+        let mut merged = Vec::with_capacity(left.len() + right.len());
+        let mut left = left.into_iter().peekable();
+        let mut right = right.into_iter().peekable();
+        loop {
+            match (
+                left.peek().map(|node| node.weight),
+                right.peek().map(|node| node.weight),
+            ) {
+                (None, None) => break,
+                (Some(_), None) => {
+                    merged.extend(left);
+                    break;
+                }
+                (None, Some(_)) => {
+                    merged.extend(right);
+                    break;
+                }
+                (Some(left_weight), Some(right_weight)) => {
+                    if left_weight < right_weight {
+                        merged.push(left.next().unwrap());
+                    } else {
+                        merged.push(right.next().unwrap());
+                    }
+                }
+            }
+        }
+        merged
+    }
+
+    fn package(mut nodes: Vec<Node>) -> Vec<Node> {
+        if nodes.len() >= 2 {
+            let new_len = nodes.len() / 2;
+            for index in 0..new_len {
+                nodes[index] = std::mem::replace(&mut nodes[index * 2], Node::empty());
+                let other = std::mem::replace(&mut nodes[index * 2 + 1], Node::empty());
+                nodes[index].merge(other);
+            }
+            nodes.truncate(new_len);
+        }
+        nodes
+    }
+
+    let mut source = frequencies
+        .iter()
+        .enumerate()
+        .filter(|(_, frequency)| **frequency > 0)
+        .map(|(symbol, frequency)| Node::single(symbol as u16, *frequency))
+        .collect::<Vec<_>>();
+    source.sort_by_key(|node| node.weight);
+
+    let weighted = (0..max_bitwidth.saturating_sub(1)).fold(source.clone(), |weighted, _| {
+        merge_nodes(package(weighted), source.clone())
+    });
+
+    let mut widths = vec![0u8; frequencies.len()];
+    for symbol in package(weighted)
+        .into_iter()
+        .flat_map(|node| node.symbols.into_iter())
+    {
+        widths[symbol as usize] += 1;
+    }
+    widths
 }
 
 struct HuffmanDecoder {
@@ -405,6 +835,43 @@ struct BitReader<'a> {
     bit_count: u8,
 }
 
+struct BitWriter {
+    bytes: Vec<u8>,
+    bit_buffer: u64,
+    bit_count: u8,
+}
+
+impl BitWriter {
+    fn new() -> Self {
+        Self {
+            bytes: Vec::new(),
+            bit_buffer: 0,
+            bit_count: 0,
+        }
+    }
+
+    fn write_bit(&mut self, bit: bool) {
+        self.write_bits(1, bit as u16);
+    }
+
+    fn write_bits(&mut self, bit_count: u8, bits: u16) {
+        self.bit_buffer |= u64::from(bits) << self.bit_count;
+        self.bit_count += bit_count;
+        while self.bit_count >= 8 {
+            self.bytes.push(self.bit_buffer as u8);
+            self.bit_buffer >>= 8;
+            self.bit_count -= 8;
+        }
+    }
+
+    fn finish(mut self) -> Vec<u8> {
+        if self.bit_count > 0 {
+            self.bytes.push(self.bit_buffer as u8);
+        }
+        self.bytes
+    }
+}
+
 impl<'a> BitReader<'a> {
     fn new(input: &'a [u8]) -> Self {
         Self {
@@ -469,7 +936,7 @@ impl<'a> BitReader<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::decompress;
+    use super::{decompress, encode_dynamic_literals};
 
     #[test]
     fn decode_known_fixed_block() {
@@ -492,5 +959,22 @@ mod tests {
         let input = [75, 76, 42, 74, 76, 78, 76, 73, 4, 82, 10, 137, 216, 217, 0];
         let decoded = decompress(&input).unwrap();
         assert_eq!(decoded, b"abracadabra abracadabra abracadabra");
+    }
+
+    #[test]
+    fn encode_dynamic_literals_roundtrip() {
+        let input = b"banana banana banana banana";
+        let encoded = encode_dynamic_literals(input).unwrap();
+        let decoded = decompress(&encoded).unwrap();
+        assert_eq!(decoded, input);
+    }
+
+    #[test]
+    fn encode_dynamic_literals_uses_matches_for_repetition() {
+        let input = vec![b'a'; 2048];
+        let encoded = encode_dynamic_literals(&input).unwrap();
+        let decoded = decompress(&encoded).unwrap();
+        assert_eq!(decoded, input);
+        assert!(encoded.len() < 64);
     }
 }
