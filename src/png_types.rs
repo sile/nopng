@@ -73,6 +73,29 @@ pub enum PngColorMode {
     Indexed,
 }
 
+impl PngColorMode {
+    pub(crate) fn from_color_type(color_type: u8) -> Self {
+        match color_type {
+            0 => Self::Grayscale,
+            2 => Self::Rgb,
+            3 => Self::Indexed,
+            4 => Self::GrayscaleAlpha,
+            6 => Self::Rgba,
+            _ => unreachable!(),
+        }
+    }
+
+    pub(crate) fn to_color_type(self) -> u8 {
+        match self {
+            Self::Grayscale => 0,
+            Self::Rgb => 2,
+            Self::Indexed => 3,
+            Self::GrayscaleAlpha => 4,
+            Self::Rgba => 6,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PngEncoding {
     pub color_mode: PngColorMode,

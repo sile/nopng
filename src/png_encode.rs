@@ -92,6 +92,7 @@ struct EncodingTarget {
     palette: Option<Vec<[u8; 3]>>,
     trns: Option<Vec<u8>>,
     pixel_kind: EncodedPixelKind,
+    color_map: Option<BTreeMap<[u8; 4], u8>>,
 }
 
 impl EncodingTarget {
@@ -162,6 +163,7 @@ impl EncodingTarget {
                     } else {
                         EncodedPixelKind::Grayscale8
                     },
+                    color_map: None,
                 })
             }
             PngColorMode::GrayscaleAlpha => {
@@ -181,6 +183,7 @@ impl EncodingTarget {
                     palette: None,
                     trns: None,
                     pixel_kind: EncodedPixelKind::GrayscaleAlpha8,
+                    color_map: None,
                 })
             }
             PngColorMode::Rgb => {
@@ -200,6 +203,7 @@ impl EncodingTarget {
                     palette: None,
                     trns: None,
                     pixel_kind: EncodedPixelKind::Rgb8,
+                    color_map: None,
                 })
             }
             PngColorMode::Rgba => {
@@ -214,6 +218,7 @@ impl EncodingTarget {
                     palette: None,
                     trns: None,
                     pixel_kind: EncodedPixelKind::Rgba8,
+                    color_map: None,
                 })
             }
             PngColorMode::Indexed => {
@@ -229,6 +234,7 @@ impl EncodingTarget {
                     palette: Some(indexed.palette),
                     trns: indexed.trns,
                     pixel_kind: EncodedPixelKind::Indexed,
+                    color_map: Some(indexed.color_map),
                 })
             }
         }
@@ -291,6 +297,7 @@ impl EncodingTarget16 {
 struct IndexedAnalysis {
     palette: Vec<[u8; 3]>,
     trns: Option<Vec<u8>>,
+    color_map: BTreeMap<[u8; 4], u8>,
 }
 
 fn build_filtered_data(
@@ -320,6 +327,7 @@ fn build_adam7_filtered_data(
     let bpp = target.filter_bpp();
     let mut filtered = Vec::new();
     let mut raw_row = Vec::new();
+    let mut pass_row_pixels = Vec::new();
     for pass in ADAM7_PASSES {
         let pass_width = adam7_axis_size(width, pass.x_start, pass.x_step);
         let pass_height = adam7_axis_size(height, pass.y_start, pass.y_step);
@@ -328,14 +336,13 @@ fn build_adam7_filtered_data(
         }
         for pass_y in 0..pass_height as usize {
             raw_row.clear();
+            pass_row_pixels.clear();
             let y = pass.y_start as usize + pass_y * pass.y_step as usize;
-            let row_pixels = (0..pass_width as usize)
-                .map(|pass_x| {
-                    let x = pass.x_start as usize + pass_x * pass.x_step as usize;
-                    pixels[y * width as usize + x]
-                })
-                .collect::<Vec<_>>();
-            encode_row_into(&mut raw_row, &row_pixels, target)?;
+            pass_row_pixels.extend((0..pass_width as usize).map(|pass_x| {
+                let x = pass.x_start as usize + pass_x * pass.x_step as usize;
+                pixels[y * width as usize + x]
+            }));
+            encode_row_into(&mut raw_row, &pass_row_pixels, target)?;
             write_filtered_row(&mut filtered, &raw_row, bpp);
         }
     }
@@ -369,6 +376,7 @@ fn build_adam7_filtered_data16(
     let bpp = target.filter_bpp();
     let mut filtered = Vec::new();
     let mut raw_row = Vec::new();
+    let mut pass_row_pixels = Vec::new();
     for pass in ADAM7_PASSES {
         let pass_width = adam7_axis_size(width, pass.x_start, pass.x_step);
         let pass_height = adam7_axis_size(height, pass.y_start, pass.y_step);
@@ -377,14 +385,13 @@ fn build_adam7_filtered_data16(
         }
         for pass_y in 0..pass_height as usize {
             raw_row.clear();
+            pass_row_pixels.clear();
             let y = pass.y_start as usize + pass_y * pass.y_step as usize;
-            let row_pixels = (0..pass_width as usize)
-                .map(|pass_x| {
-                    let x = pass.x_start as usize + pass_x * pass.x_step as usize;
-                    pixels[y * width as usize + x]
-                })
-                .collect::<Vec<_>>();
-            encode_row16_into(&mut raw_row, &row_pixels, target);
+            pass_row_pixels.extend((0..pass_width as usize).map(|pass_x| {
+                let x = pass.x_start as usize + pass_x * pass.x_step as usize;
+                pixels[y * width as usize + x]
+            }));
+            encode_row16_into(&mut raw_row, &pass_row_pixels, target);
             write_filtered_row(&mut filtered, &raw_row, bpp);
         }
     }
@@ -393,7 +400,10 @@ fn build_adam7_filtered_data16(
 
 /// Select between filter None (0) and Sub (1) using minimum-sum-of-absolutes heuristic.
 fn write_filtered_row(out: &mut Vec<u8>, raw: &[u8], bpp: usize) {
-    let none_cost: u32 = raw.iter().map(|&b| u32::from(b)).sum();
+    let none_cost: u32 = raw
+        .iter()
+        .map(|&b| u32::from((b as i8).unsigned_abs()))
+        .sum();
 
     let sub_cost: u32 = raw
         .iter()
@@ -448,23 +458,16 @@ fn encode_row_into(
             }
         }
         EncodedPixelKind::Indexed => {
-            let palette = target
-                .palette
+            let color_map = target
+                .color_map
                 .as_ref()
-                .expect("bug: indexed encoding target must include a palette");
+                .expect("bug: indexed encoding target must include a color map");
             let indices = row_pixels
                 .iter()
                 .map(|pixel| {
-                    palette
-                        .iter()
-                        .zip(target_alpha(target))
-                        .position(|(rgb, alpha)| {
-                            *rgb == [pixel[0], pixel[1], pixel[2]] && alpha == pixel[3]
-                        })
-                        .map(|index| index as u8)
-                        .ok_or_else(|| {
-                            Error::InvalidData("pixel missing from indexed palette".into())
-                        })
+                    color_map.get(pixel).copied().ok_or_else(|| {
+                        Error::InvalidData("pixel missing from indexed palette".into())
+                    })
                 })
                 .collect::<core::result::Result<Vec<_>, _>>()?;
             pack_samples_to(out, &indices, target.bit_depth);
@@ -501,12 +504,6 @@ fn encode_row16_into(out: &mut Vec<u8>, row_pixels: &[[u16; 4]], target: &Encodi
             }
         }
     }
-}
-
-fn target_alpha(target: &EncodingTarget) -> impl Iterator<Item = u8> + '_ {
-    let trns = target.trns.as_deref().unwrap_or(&[]);
-    (0..target.palette.as_ref().map_or(0, Vec::len))
-        .map(move |index| trns.get(index).copied().unwrap_or(255))
 }
 
 fn pack_samples_to(out: &mut Vec<u8>, samples: &[u8], bit_depth: u8) {
@@ -676,5 +673,10 @@ fn analyze_palette(pixels: &[[u8; 4]]) -> Option<IndexedAnalysis> {
         }
         Some(alpha)
     };
-    Some(IndexedAnalysis { palette, trns })
+    let color_map = map.into_iter().map(|(k, v)| (k, v as u8)).collect();
+    Some(IndexedAnalysis {
+        palette,
+        trns,
+        color_map,
+    })
 }

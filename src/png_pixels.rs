@@ -239,6 +239,12 @@ impl<'a> PngPixels<'a> {
         }
     }
 
+    /// Creates a `'static` copy by cloning any borrowed data.
+    ///
+    /// Unlike [`Clone::clone`], which preserves the original lifetime, this
+    /// method erases the lifetime parameter so the result can outlive the
+    /// borrowed source.  Use `clone()` when you need a copy with the same
+    /// lifetime and `to_owned()` when you need a `PngPixels<'static>`.
     pub fn to_owned(&self) -> PngPixels<'static> {
         match self {
             Self::Gray1(data) => PngPixels::Gray1(Cow::Owned(data.to_vec())),

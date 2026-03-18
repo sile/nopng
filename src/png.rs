@@ -1,4 +1,3 @@
-use alloc::format;
 use alloc::vec::Vec;
 
 use crate::chunk::{IdatChunk, IendChunk, IhdrChunk, PlteChunk, TrnsChunk};
@@ -70,15 +69,13 @@ impl PngInfo {
     }
 
     pub fn filtered_bytes(&self) -> Option<usize> {
-        let header = crate::png_decode::PngHeader {
-            width: self.width,
-            height: self.height,
-            bit_depth: self.bit_depth.as_u8(),
-            color_type: color_type_from_color_mode(self.color_mode),
-            compression_method: 0,
-            filter_method: 0,
-            interlace_method: u8::from(self.interlaced),
-        };
+        let header = crate::png_decode::PngHeader::new(
+            self.width,
+            self.height,
+            self.bit_depth.as_u8(),
+            self.color_mode.to_color_type(),
+            u8::from(self.interlaced),
+        );
         crate::png_decode::expected_filtered_len(&header).ok()
     }
 
@@ -88,7 +85,7 @@ impl PngInfo {
             height: header.height,
             bit_depth: PngBitDepth::from_u8(header.bit_depth)
                 .expect("bug: validated bit depth must map to PngBitDepth"),
-            color_mode: color_mode_from_color_type(header.color_type),
+            color_mode: PngColorMode::from_color_type(header.color_type),
             interlaced: header.interlace_method == 1,
         }
     }
@@ -148,21 +145,7 @@ impl<'a> PngImage<'a> {
     /// width, height, pixel count, or expected decoded RGBA8 size before doing
     /// a full decode.
     pub fn from_bytes(bytes: &[u8]) -> Result<PngImage<'static>> {
-        let (header, ancillary, idat_data) = crate::png_decode::parse_png(bytes)?;
-        let expected_filtered = crate::png_decode::expected_filtered_len(&header)?;
-        crate::png_decode::expected_raw_len(&header)?;
-        let filtered = crate::png_decode::decompress_zlib(&idat_data)?;
-        if filtered.len() != expected_filtered {
-            return Err(Error::InvalidData(
-                format!(
-                    "unexpected filtered data size: expected {}, got {}",
-                    expected_filtered,
-                    filtered.len()
-                )
-                .into(),
-            ));
-        }
-        let pixels = crate::png_decode::decode_to_pixels(&header, &filtered, &ancillary)?;
+        let (header, pixels) = crate::png_decode::decode_png(bytes)?;
         let encoding = PngEncoding::for_pixels(&pixels);
         PngImage::<'static>::new(header.width, header.height, pixels, encoding)
     }
@@ -227,27 +210,6 @@ impl<'a> PngImage<'a> {
         IendChunk.append_to(&mut bytes);
 
         Ok(bytes)
-    }
-}
-
-fn color_mode_from_color_type(color_type: u8) -> PngColorMode {
-    match color_type {
-        0 => PngColorMode::Grayscale,
-        2 => PngColorMode::Rgb,
-        3 => PngColorMode::Indexed,
-        4 => PngColorMode::GrayscaleAlpha,
-        6 => PngColorMode::Rgba,
-        _ => unreachable!(),
-    }
-}
-
-fn color_type_from_color_mode(color_mode: PngColorMode) -> u8 {
-    match color_mode {
-        PngColorMode::Grayscale => 0,
-        PngColorMode::Rgb => 2,
-        PngColorMode::Indexed => 3,
-        PngColorMode::GrayscaleAlpha => 4,
-        PngColorMode::Rgba => 6,
     }
 }
 
@@ -403,6 +365,37 @@ mod tests {
     fn png_info_rejects_truncated_ihdr() {
         let error = PngInfo::from_bytes(&PNG_SIGNATURE).expect_err("infallible");
         assert!(matches!(error, Error::InvalidData(message) if message.contains("unexpected end")));
+    }
+
+    #[test]
+    fn new_rejects_zero_width() {
+        let error =
+            PngImage::new(0, 1, PngPixels::from_rgba8(vec![]), PngEncoding::default()).unwrap_err();
+        assert!(matches!(error, Error::InvalidData(message) if message.contains("non-zero")));
+    }
+
+    #[test]
+    fn new_rejects_zero_height() {
+        let error =
+            PngImage::new(1, 0, PngPixels::from_rgba8(vec![]), PngEncoding::default()).unwrap_err();
+        assert!(matches!(error, Error::InvalidData(message) if message.contains("non-zero")));
+    }
+
+    #[test]
+    fn roundtrip_1x1_rgba() {
+        let pixels = PngPixels::from_rgba8(vec![42, 128, 200, 255]);
+        let image = PngImage::new(1, 1, pixels.clone(), PngEncoding::for_pixels(&pixels))
+            .expect("infallible");
+        let bytes = image.to_bytes().expect("infallible");
+        let decoded = PngImage::from_bytes(&bytes).expect("infallible");
+        assert_eq!(
+            decoded
+                .pixels()
+                .to_rgba8()
+                .as_u8_slice()
+                .expect("infallible"),
+            pixels.to_rgba8().as_u8_slice().expect("infallible")
+        );
     }
 
     struct IhdrInfo {

@@ -23,6 +23,24 @@ pub(crate) struct PngHeader {
 }
 
 impl PngHeader {
+    pub(crate) fn new(
+        width: u32,
+        height: u32,
+        bit_depth: u8,
+        color_type: u8,
+        interlace_method: u8,
+    ) -> Self {
+        Self {
+            width,
+            height,
+            bit_depth,
+            color_type,
+            compression_method: 0,
+            filter_method: 0,
+            interlace_method,
+        }
+    }
+
     pub(crate) fn parse(chunk_data: &[u8]) -> Result<Self> {
         if chunk_data.len() != 13 {
             return Err(Error::InvalidData(
@@ -220,6 +238,25 @@ impl<'a> Cursor<'a> {
     }
 }
 
+pub(crate) fn decode_png(bytes: &[u8]) -> Result<(PngHeader, PngPixels<'static>)> {
+    let (header, ancillary, idat_data) = parse_png(bytes)?;
+    let expected_filtered = expected_filtered_len(&header)?;
+    expected_raw_len(&header)?;
+    let filtered = decompress_zlib(&idat_data)?;
+    if filtered.len() != expected_filtered {
+        return Err(Error::InvalidData(
+            format!(
+                "unexpected filtered data size: expected {}, got {}",
+                expected_filtered,
+                filtered.len()
+            )
+            .into(),
+        ));
+    }
+    let pixels = decode_to_pixels(&header, &filtered, &ancillary)?;
+    Ok((header, pixels))
+}
+
 pub(crate) fn parse_png_header(bytes: &[u8]) -> Result<PngHeader> {
     if bytes.len() < PNG_SIGNATURE.len() || bytes[..PNG_SIGNATURE.len()] != PNG_SIGNATURE {
         return Err(Error::InvalidData("invalid PNG signature".into()));
@@ -234,7 +271,7 @@ pub(crate) fn parse_png_header(bytes: &[u8]) -> Result<PngHeader> {
     PngHeader::parse(chunk_data)
 }
 
-pub(crate) fn parse_png(bytes: &[u8]) -> Result<(PngHeader, AncillaryChunks, Vec<u8>)> {
+fn parse_png(bytes: &[u8]) -> Result<(PngHeader, AncillaryChunks, Vec<u8>)> {
     if bytes.len() < PNG_SIGNATURE.len() || bytes[..PNG_SIGNATURE.len()] != PNG_SIGNATURE {
         return Err(Error::InvalidData("invalid PNG signature".into()));
     }
@@ -390,7 +427,7 @@ fn parse_transparency(
     }
 }
 
-pub(crate) fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>> {
+fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>> {
     if data.len() < 6 {
         return Err(Error::InvalidData("zlib stream is too short".into()));
     }
@@ -432,7 +469,7 @@ pub(crate) fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>> {
     Ok(decoded)
 }
 
-pub(crate) fn decode_to_pixels(
+fn decode_to_pixels(
     header: &PngHeader,
     filtered: &[u8],
     ancillary: &AncillaryChunks,
@@ -1051,7 +1088,7 @@ fn expected_filtered_len_for_size(header: &PngHeader, width: u32, height: u32) -
         .ok_or_else(|| Error::InvalidData("filtered data size overflow".into()))
 }
 
-pub(crate) fn expected_raw_len(header: &PngHeader) -> Result<usize> {
+fn expected_raw_len(header: &PngHeader) -> Result<usize> {
     let stride = packed_stride_for_width(header, header.width)?;
     stride
         .checked_mul(header.height as usize)
