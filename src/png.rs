@@ -192,12 +192,16 @@ pub struct PngImage {
 
 impl PngImage {
     /// Creates a PNG image from RGBA8 pixel bytes and infers a concrete encoding.
-    pub fn new(width: u32, height: u32, data: Vec<u8>) -> Option<Self> {
+    pub fn new(width: u32, height: u32, data: Vec<u8>) -> Result<Self> {
         if (width * height * 4) as usize != data.len() {
-            None
+            Err(Error::InvalidData(
+                "image size does not match RGBA8 buffer length".into(),
+            ))
         } else {
-            let encoding = PngEncoding::infer_from_rgba(&data)?;
-            Some(Self {
+            let encoding = PngEncoding::infer_from_rgba(&data).ok_or_else(|| {
+                Error::InvalidData("RGBA8 buffer length must be a multiple of 4".into())
+            })?;
+            Ok(Self {
                 width,
                 height,
                 data,
@@ -211,11 +215,13 @@ impl PngImage {
         height: u32,
         data: Vec<u8>,
         encoding: PngEncoding,
-    ) -> Option<Self> {
+    ) -> Result<Self> {
         if (width * height * 4) as usize != data.len() {
-            None
+            Err(Error::InvalidData(
+                "image size does not match RGBA8 buffer length".into(),
+            ))
         } else {
-            Some(Self {
+            Ok(Self {
                 width,
                 height,
                 data,
@@ -326,7 +332,6 @@ impl PngImage {
         let rgba = decode_to_rgba(&header, &filtered, &ancillary)?;
         let encoding = PngEncoding::from_decoded_image(&header, &ancillary);
         Self::new_with_encoding(header.width, header.height, rgba, encoding)
-            .ok_or_else(|| Error::InvalidData("decoded image size mismatch".into()))
     }
 
     pub fn width(&self) -> u32 {
@@ -1574,7 +1579,7 @@ impl<'a> Cursor<'a> {
 mod tests {
     use alloc::vec;
 
-    use super::{IhdrChunk, PngBitDepth, PngColorMode, PngEncoding, PngImage};
+    use super::{Error, IhdrChunk, PngBitDepth, PngColorMode, PngEncoding, PngImage};
 
     #[test]
     fn roundtrip_rgba_writer_and_reader() {
@@ -1670,6 +1675,28 @@ mod tests {
     #[test]
     fn infer_from_rgba_returns_none_for_partial_pixel() {
         assert_eq!(PngEncoding::infer_from_rgba(&[1, 2, 3]), None);
+    }
+
+    #[test]
+    fn new_rejects_rgba8_length_mismatch() {
+        let error = PngImage::new(2, 1, vec![0, 1, 2, 3]).unwrap_err();
+        assert!(matches!(error, Error::InvalidData(message) if message.contains("image size does not match RGBA8 buffer length")));
+    }
+
+    #[test]
+    fn new_with_encoding_rejects_rgba8_length_mismatch() {
+        let error = PngImage::new_with_encoding(
+            2,
+            1,
+            vec![0, 1, 2, 3],
+            PngEncoding {
+                color_mode: PngColorMode::Rgba,
+                bit_depth: PngBitDepth::Eight,
+                interlaced: false,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::InvalidData(message) if message.contains("image size does not match RGBA8 buffer length")));
     }
 
     #[test]

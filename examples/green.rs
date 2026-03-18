@@ -18,7 +18,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Create the PNG image
-    let png_image = PngImage::new(width, height, data).expect("infallible");
+    let png_image = PngImage::new(width, height, data)?;
 
     // Write the PNG to stdout
     let bytes = png_image.to_bytes()?;
