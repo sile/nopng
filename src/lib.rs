@@ -7,6 +7,8 @@ mod chunk;
 mod crc;
 mod deflate;
 mod png;
+mod png_decode;
+mod png_encode;
 mod png_pixels;
 mod png_types;
 mod zlib;

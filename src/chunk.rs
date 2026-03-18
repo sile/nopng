@@ -1,7 +1,7 @@
 use alloc::format;
 use alloc::vec::Vec;
 
-use crate::{adler32, crc, deflate, zlib::ZlibHeader};
+use crate::{adler32, crc, deflate, zlib};
 
 #[derive(Debug, Clone)]
 pub struct IhdrChunk {
@@ -13,8 +13,6 @@ pub struct IhdrChunk {
 }
 
 impl IhdrChunk {
-    const SIZE: u32 = 13;
-
     pub const COLOR_TYPE_GRAYSCALE: u8 = 0;
     pub const COLOR_TYPE_RGB: u8 = 2;
     pub const COLOR_TYPE_INDEXED: u8 = 3;
@@ -24,14 +22,14 @@ impl IhdrChunk {
     const FILTER_METHOD_ADAPTIVE: u8 = 0;
 
     pub fn append_to(&self, out: &mut Vec<u8>) {
-        let mut data = Vec::with_capacity(Self::SIZE as usize);
-        data.extend_from_slice(&self.width.to_be_bytes());
-        data.extend_from_slice(&self.height.to_be_bytes());
-        data.push(self.bit_depth);
-        data.push(self.color_type);
-        data.push(Self::COMPRESSION_METHOD_DEFLATE);
-        data.push(Self::FILTER_METHOD_ADAPTIVE);
-        data.push(self.interlace_method);
+        let mut data = [0u8; 13];
+        data[0..4].copy_from_slice(&self.width.to_be_bytes());
+        data[4..8].copy_from_slice(&self.height.to_be_bytes());
+        data[8] = self.bit_depth;
+        data[9] = self.color_type;
+        data[10] = Self::COMPRESSION_METHOD_DEFLATE;
+        data[11] = Self::FILTER_METHOD_ADAPTIVE;
+        data[12] = self.interlace_method;
         append_chunk(out, b"IHDR", &data);
     }
 }
@@ -85,7 +83,7 @@ impl IdatChunk<'_> {
 
     fn chunk_data(&self) -> crate::png::Result<Vec<u8>> {
         let mut data = Vec::new();
-        data.extend_from_slice(&ZlibHeader.bytes());
+        data.extend_from_slice(&zlib::ZLIB_HEADER);
         let deflated = deflate::compress(self.filtered_data).map_err(|error| {
             crate::png::Error::InvalidData(format!("invalid deflate stream: {error}").into())
         })?;

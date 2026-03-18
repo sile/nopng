@@ -1,16 +1,20 @@
-use alloc::collections::BinaryHeap;
 use alloc::format;
-use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::cmp;
-use core::error::Error as CoreError;
+
+use crate::png_types::{Error, Result};
 
 const MAX_BITS: usize = 15;
 const END_OF_BLOCK: u16 = 256;
 const WINDOW_SIZE: usize = 32_768;
 const MAX_MATCH: usize = 258;
 const MIN_MATCH: usize = 3;
+const HASH_BITS: usize = 15;
+const HASH_SIZE: usize = 1 << HASH_BITS;
+const HASH_MASK: usize = HASH_SIZE - 1;
+const MAX_CHAIN_LEN: usize = 32;
+const NIL: u32 = u32::MAX;
 const BITWIDTH_CODE_ORDER: [usize; 19] = [
     16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
 ];
@@ -78,25 +82,6 @@ const DISTANCE_TABLE: [(u16, u8); 30] = [
     (24_577, 13),
 ];
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Error {
-    UnexpectedEof,
-    InvalidData(String),
-}
-
-impl core::fmt::Display for Error {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Error::UnexpectedEof => write!(f, "unexpected end of input"),
-            Error::InvalidData(message) => f.write_str(message),
-        }
-    }
-}
-
-impl CoreError for Error {}
-
-type Result<T> = core::result::Result<T, Error>;
-
 pub fn compress(data: &[u8]) -> Result<Vec<u8>> {
     encode_dynamic_literals(data)
 }
@@ -104,22 +89,23 @@ pub fn compress(data: &[u8]) -> Result<Vec<u8>> {
 pub fn decompress(input: &[u8]) -> Result<Vec<u8>> {
     let mut reader = BitReader::new(input);
     let mut output = Vec::new();
+    let fixed_lit = fixed_literal_decoder()?;
+    let fixed_dist = fixed_distance_decoder()?;
     loop {
         let is_final = reader.read_bit()?;
         let block_type = reader.read_bits(2)?;
         match block_type {
             0b00 => decode_raw_block(&mut reader, &mut output)?,
-            0b01 => decode_compressed_block(
-                &mut reader,
-                &fixed_literal_decoder()?,
-                &fixed_distance_decoder()?,
-                &mut output,
-            )?,
+            0b01 => {
+                decode_compressed_block(&mut reader, &fixed_lit, &fixed_dist, &mut output)?;
+            }
             0b10 => {
                 let (literal, distance) = read_dynamic_decoders(&mut reader)?;
                 decode_compressed_block(&mut reader, &literal, &distance, &mut output)?;
             }
-            0b11 => return Err(Error::InvalidData("reserved DEFLATE block type".into())),
+            0b11 => {
+                return Err(Error::InvalidData("reserved DEFLATE block type".into()));
+            }
             _ => unreachable!(),
         }
         if is_final {
@@ -134,10 +120,9 @@ fn decode_raw_block(reader: &mut BitReader<'_>, output: &mut Vec<u8>) -> Result<
     let len = reader.read_u16_le()?;
     let nlen = reader.read_u16_le()?;
     if !len != nlen {
-        return Err(Error::InvalidData(format!(
-            "LEN={} is not the one's complement of NLEN={}",
-            len, nlen
-        )));
+        return Err(Error::InvalidData(
+            format!("LEN={} is not the one's complement of NLEN={}", len, nlen).into(),
+        ));
     }
     let bytes = reader.read_bytes(len as usize)?;
     output.extend_from_slice(bytes);
@@ -168,10 +153,9 @@ fn decode_compressed_block(
                 let Some((base_distance, distance_extra_bits)) =
                     DISTANCE_TABLE.get(distance_symbol as usize).copied()
                 else {
-                    return Err(Error::InvalidData(format!(
-                        "invalid distance symbol: {}",
-                        distance_symbol
-                    )));
+                    return Err(Error::InvalidData(
+                        format!("invalid distance symbol: {}", distance_symbol).into(),
+                    ));
                 };
                 let distance_extra = if distance_extra_bits == 0 {
                     0
@@ -182,10 +166,13 @@ fn decode_compressed_block(
                 copy_from_distance(output, distance, length as usize)?;
             }
             286 | 287 => {
-                return Err(Error::InvalidData(format!(
-                    "literal/length symbol {} must not appear in compressed data",
-                    symbol
-                )));
+                return Err(Error::InvalidData(
+                    format!(
+                        "literal/length symbol {} must not appear in compressed data",
+                        symbol
+                    )
+                    .into(),
+                ));
             }
             _ => unreachable!(),
         }
@@ -194,11 +181,14 @@ fn decode_compressed_block(
 
 fn copy_from_distance(output: &mut Vec<u8>, distance: usize, length: usize) -> Result<()> {
     if distance == 0 || distance > output.len() {
-        return Err(Error::InvalidData(format!(
-            "too long backward reference: output_len={}, distance={}",
-            output.len(),
-            distance
-        )));
+        return Err(Error::InvalidData(
+            format!(
+                "too long backward reference: output_len={}, distance={}",
+                output.len(),
+                distance
+            )
+            .into(),
+        ));
     }
 
     let start = output.len() - distance;
@@ -215,10 +205,9 @@ fn read_dynamic_decoders(reader: &mut BitReader<'_>) -> Result<(HuffmanDecoder, 
     let bitwidth_code_count = reader.read_bits(4)? + 4;
 
     if distance_code_count as usize > DISTANCE_TABLE.len() {
-        return Err(Error::InvalidData(format!(
-            "HDIST is too large: {}",
-            distance_code_count
-        )));
+        return Err(Error::InvalidData(
+            format!("HDIST is too large: {}", distance_code_count).into(),
+        ));
     }
 
     let mut bitwidth_code_lengths = [0u8; 19];
@@ -375,49 +364,89 @@ fn encode_dynamic_literals(input: &[u8]) -> Result<Vec<u8>> {
     Ok(writer.finish())
 }
 
+fn hash3(input: &[u8], pos: usize) -> usize {
+    ((usize::from(input[pos]) << 10)
+        ^ (usize::from(input[pos + 1]) << 5)
+        ^ usize::from(input[pos + 2]))
+        & HASH_MASK
+}
+
 fn lz77_symbols(input: &[u8]) -> Vec<DeflateSymbol> {
     let mut symbols = Vec::new();
+    if input.len() < MIN_MATCH {
+        for &byte in input {
+            symbols.push(DeflateSymbol::Literal(byte));
+        }
+        return symbols;
+    }
+
+    let mut head = vec![NIL; HASH_SIZE];
+    let mut prev = vec![NIL; WINDOW_SIZE];
     let mut cursor = 0;
+
     while cursor < input.len() {
-        if let Some((distance, length)) = find_match(input, cursor) {
-            symbols.push(DeflateSymbol::Pointer { length, distance });
-            cursor += length;
+        if cursor + MIN_MATCH > input.len() {
+            symbols.push(DeflateSymbol::Literal(input[cursor]));
+            cursor += 1;
+            continue;
+        }
+
+        let h = hash3(input, cursor);
+        let max_length = (input.len() - cursor).min(MAX_MATCH);
+        let search_start = cursor.saturating_sub(WINDOW_SIZE);
+
+        let mut best_length = 0;
+        let mut best_distance = 0;
+        let mut chain_pos = head[h];
+        let mut chain_count = 0;
+
+        while chain_pos != NIL
+            && (chain_pos as usize) >= search_start
+            && (chain_pos as usize) < cursor
+            && chain_count < MAX_CHAIN_LEN
+        {
+            let candidate = chain_pos as usize;
+            if input[candidate] == input[cursor] {
+                let mut length = 1;
+                while length < max_length && input[candidate + length] == input[cursor + length] {
+                    length += 1;
+                }
+                if length >= MIN_MATCH && length > best_length {
+                    best_length = length;
+                    best_distance = cursor - candidate;
+                    if length == max_length {
+                        break;
+                    }
+                }
+            }
+            chain_pos = prev[candidate & (WINDOW_SIZE - 1)];
+            chain_count += 1;
+        }
+
+        // Insert current position into hash chain.
+        prev[cursor & (WINDOW_SIZE - 1)] = head[h];
+        head[h] = cursor as u32;
+
+        if best_length >= MIN_MATCH {
+            // Insert skipped positions so future matches can find them.
+            for i in 1..best_length {
+                if cursor + i + MIN_MATCH <= input.len() {
+                    let ih = hash3(input, cursor + i);
+                    prev[(cursor + i) & (WINDOW_SIZE - 1)] = head[ih];
+                    head[ih] = (cursor + i) as u32;
+                }
+            }
+            symbols.push(DeflateSymbol::Pointer {
+                length: best_length,
+                distance: best_distance,
+            });
+            cursor += best_length;
         } else {
             symbols.push(DeflateSymbol::Literal(input[cursor]));
             cursor += 1;
         }
     }
     symbols
-}
-
-fn find_match(input: &[u8], cursor: usize) -> Option<(usize, usize)> {
-    if cursor + MIN_MATCH > input.len() {
-        return None;
-    }
-
-    let search_start = cursor.saturating_sub(WINDOW_SIZE);
-    let max_length = (input.len() - cursor).min(MAX_MATCH);
-    let mut best_distance = 0;
-    let mut best_length = 0;
-
-    for candidate in search_start..cursor {
-        if input[candidate] != input[cursor] {
-            continue;
-        }
-        let mut length = 1;
-        while length < max_length && input[candidate + length] == input[cursor + length] {
-            length += 1;
-        }
-        if length >= MIN_MATCH && length > best_length {
-            best_length = length;
-            best_distance = cursor - candidate;
-            if length == max_length {
-                break;
-            }
-        }
-    }
-
-    (best_length >= MIN_MATCH).then_some((best_distance, best_length))
 }
 
 fn reverse_bits(bits: u16, width: u8) -> u16 {
@@ -638,7 +667,7 @@ fn length_limited_code_lengths(frequencies: &[usize], max_bitwidth: u8) -> Vec<u
 }
 
 fn ordinary_huffman_optimal_max_bitwidth(frequencies: &[usize]) -> u8 {
-    let mut heap = BinaryHeap::new();
+    let mut heap = alloc::collections::BinaryHeap::new();
     for &frequency in frequencies.iter().filter(|&&value| value > 0) {
         heap.push((-(frequency as isize), 0u8));
     }
@@ -891,7 +920,9 @@ impl<'a> BitReader<'a> {
     fn peek_bits(&mut self, bit_count: u8) -> Result<u16> {
         while self.bit_count < bit_count {
             let Some(&next) = self.input.get(self.byte_index) else {
-                return Err(Error::UnexpectedEof);
+                return Err(Error::InvalidData(
+                    "unexpected end of deflate stream".into(),
+                ));
             };
             self.bit_buffer |= u64::from(next) << self.bit_count;
             self.bit_count += 8;
@@ -923,7 +954,9 @@ impl<'a> BitReader<'a> {
         self.align_to_byte();
         let end = self.byte_index + len;
         let Some(bytes) = self.input.get(self.byte_index..end) else {
-            return Err(Error::UnexpectedEof);
+            return Err(Error::InvalidData(
+                "unexpected end of deflate stream".into(),
+            ));
         };
         self.byte_index = end;
         Ok(bytes)

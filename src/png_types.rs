@@ -1,7 +1,7 @@
 use alloc::borrow::Cow;
 use core::error::Error as CoreError;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Error {
     Unsupported(Cow<'static, str>),
     InvalidData(Cow<'static, str>),
