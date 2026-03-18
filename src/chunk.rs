@@ -1,3 +1,6 @@
+use alloc::format;
+use alloc::vec::Vec;
+
 use crate::{adler32, crc, deflate, zlib::ZlibHeader};
 
 #[derive(Debug, Clone)]

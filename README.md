@@ -6,7 +6,13 @@ nopng
 [![Actions Status](https://github.com/sile/nopng/workflows/CI/badge.svg)](https://github.com/sile/nopng/actions)
 ![License](https://img.shields.io/crates/l/nopng)
 
-A Rust [PNG] library with no dependencies.
+A Rust [PNG] library with no dependencies, `no_std`, and no trait-based public API.
+
+The `no` in `nopng` stands for:
+
+- no dependencies
+- no_std
+- no trait-based public API
 
 [PNG]: https://www.w3.org/TR/PNG/
 
@@ -39,27 +45,27 @@ Supported Encoding
   - other color types: `8-bit`
 - `PngBitDepth::Sixteen` may appear after decoding a 16-bit PNG, but `PngImage::to_bytes()` still writes an 8-bit PNG because `PngImage` stores RGBA8 pixels
 
+no_std
+------
+
+- The library itself is `no_std` and uses `alloc`
+- Decoding is byte-based via `PngImage::from_bytes(&[u8])`
+- Encoding is byte-based via `PngImage::to_bytes()`
+- `std` is only needed by callers that want file or console I/O
+
 Example
 -------
 
 ```rust
-use nopng::{PngBitDepth, PngColorMode, PngEncoding, PngImage};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let bytes = std::fs::read("image.png")?;
-    let mut image = PngImage::from_bytes(&bytes)?;
-
-    println!("{}x{}", image.width(), image.height());
-    println!("rgba bytes: {}", image.data().len());
-    println!("source encoding: {:?}", image.encoding());
-
-    *image.encoding_mut() = PngEncoding {
-        color_mode: PngColorMode::Indexed,
-        bit_depth: PngBitDepth::Four,
+fn convert(bytes: &[u8]) -> Result<Vec<u8>, nopng::PngEncodeError> {
+    let mut image = nopng::PngImage::from_bytes(bytes)
+        .map_err(|e| nopng::PngEncodeError::InvalidData(e.to_string()))?;
+    *image.encoding_mut() = nopng::PngEncoding {
+        color_mode: nopng::PngColorMode::Indexed,
+        bit_depth: nopng::PngBitDepth::Four,
         interlaced: true,
     };
-    let encoded = image.to_bytes()?;
-    Ok(())
+    image.to_bytes()
 }
 ```
 

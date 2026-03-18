@@ -1,3 +1,10 @@
+use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::format;
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::error::Error;
+
 use crate::chunk::{IdatChunk, IendChunk, IhdrChunk, PlteChunk, TrnsChunk};
 use crate::{adler32, crc, deflate};
 
@@ -61,8 +68,8 @@ pub enum PngEncodeError {
     InvalidData(String),
 }
 
-impl std::fmt::Display for PngEncodeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for PngEncodeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Unsupported(message) => f.write_str(message),
             Self::InvalidData(message) => f.write_str(message),
@@ -70,8 +77,8 @@ impl std::fmt::Display for PngEncodeError {
     }
 }
 
-impl std::error::Error for PngEncodeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl Error for PngEncodeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Unsupported(_) | Self::InvalidData(_) => None,
         }
@@ -175,8 +182,8 @@ impl PngEncoding {
     }
 }
 
-impl std::fmt::Display for PngDecodeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for PngDecodeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::InvalidSignature => f.write_str("invalid PNG signature"),
             Self::InvalidChunk(message) => f.write_str(message),
@@ -186,8 +193,8 @@ impl std::fmt::Display for PngDecodeError {
     }
 }
 
-impl std::error::Error for PngDecodeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl Error for PngDecodeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::InvalidSignature
             | Self::InvalidChunk(_)
@@ -275,7 +282,7 @@ impl PngImage {
             if actual_crc != expected_crc {
                 return Err(PngDecodeError::InvalidChunk(format!(
                     "CRC mismatch for chunk {}",
-                    std::str::from_utf8(&chunk_type).unwrap_or("????"),
+                    core::str::from_utf8(&chunk_type).unwrap_or("????"),
                 )));
             }
 
@@ -725,7 +732,7 @@ fn unfilter_scanlines(
         let row_start = row * stride;
         let (before, current_and_after) = raw.split_at_mut(row_start);
         let dst = &mut current_and_after[..stride];
-        let prev = if row == 0 {
+        let prev: Option<&[u8]> = if row == 0 {
             None
         } else {
             Some(&before[before.len() - stride..])
@@ -1147,7 +1154,7 @@ fn infer_encoding_from_pixels(pixels: &[[u8; 4]]) -> PngEncoding {
     let gray_level_count = pixels
         .iter()
         .map(|pixel| pixel[0])
-        .collect::<std::collections::BTreeSet<_>>()
+        .collect::<BTreeSet<_>>()
         .len();
 
     let (color_mode, bit_depth) = if grayscale && opaque {
@@ -1263,8 +1270,6 @@ fn validate_indexed_bit_depth(size: usize, bit_depth: PngBitDepth) -> Result<(),
 }
 
 fn analyze_palette(pixels: &[[u8; 4]]) -> Option<IndexedAnalysis> {
-    use std::collections::BTreeMap;
-
     let mut map = BTreeMap::<[u8; 4], usize>::new();
     let mut palette = Vec::<[u8; 3]>::new();
     let mut alpha = Vec::<u8>::new();
@@ -1595,6 +1600,8 @@ impl<'a> Cursor<'a> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
+
     use super::{IhdrChunk, PngBitDepth, PngColorMode, PngEncoding, PngImage};
 
     #[test]

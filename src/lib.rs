@@ -1,3 +1,7 @@
+#![no_std]
+
+extern crate alloc;
+
 mod adler32;
 mod chunk;
 mod crc;

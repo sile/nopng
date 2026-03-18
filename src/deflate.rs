@@ -1,5 +1,10 @@
-use std::cmp;
-use std::collections::BinaryHeap;
+use alloc::collections::BinaryHeap;
+use alloc::format;
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::cmp;
+use core::error::Error as CoreError;
 
 const MAX_BITS: usize = 15;
 const END_OF_BLOCK: u16 = 256;
@@ -79,8 +84,8 @@ pub enum Error {
     InvalidData(String),
 }
 
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Error::UnexpectedEof => write!(f, "unexpected end of input"),
             Error::InvalidData(message) => f.write_str(message),
@@ -88,9 +93,9 @@ impl std::fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl CoreError for Error {}
 
-type Result<T> = std::result::Result<T, Error>;
+type Result<T> = core::result::Result<T, Error>;
 
 pub fn compress(data: &[u8]) -> Result<Vec<u8>> {
     encode_dynamic_literals(data)
@@ -239,15 +244,15 @@ fn read_dynamic_decoders(reader: &mut BitReader<'_>) -> Result<(HuffmanDecoder, 
                         "repeat code 16 without a previous code".into(),
                     ));
                 };
-                all_code_lengths.extend(std::iter::repeat_n(last, repeat as usize));
+                all_code_lengths.extend(core::iter::repeat_n(last, repeat as usize));
             }
             17 => {
                 let repeat = reader.read_bits(3)? + 3;
-                all_code_lengths.extend(std::iter::repeat_n(0, repeat as usize));
+                all_code_lengths.extend(core::iter::repeat_n(0, repeat as usize));
             }
             18 => {
                 let repeat = reader.read_bits(7)? + 11;
-                all_code_lengths.extend(std::iter::repeat_n(0, repeat as usize));
+                all_code_lengths.extend(core::iter::repeat_n(0, repeat as usize));
             }
             _ => unreachable!(),
         }
@@ -707,8 +712,8 @@ fn package_merge_code_lengths(frequencies: &[usize], max_bitwidth: u8) -> Vec<u8
         if nodes.len() >= 2 {
             let new_len = nodes.len() / 2;
             for index in 0..new_len {
-                nodes[index] = std::mem::replace(&mut nodes[index * 2], Node::empty());
-                let other = std::mem::replace(&mut nodes[index * 2 + 1], Node::empty());
+                nodes[index] = core::mem::replace(&mut nodes[index * 2], Node::empty());
+                let other = core::mem::replace(&mut nodes[index * 2 + 1], Node::empty());
                 nodes[index].merge(other);
             }
             nodes.truncate(new_len);
@@ -927,6 +932,8 @@ impl<'a> BitReader<'a> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
+
     use super::{decompress, encode_dynamic_literals};
 
     #[test]
