@@ -116,7 +116,7 @@ proptest! {
 
     #[test]
     fn roundtrip_random_rgba((width, height, rgba) in rgba_image_strategy(8, 8)) {
-        let pixels = PngPixels::from_rgba8(rgba.clone());
+        let pixels = PngPixels::Rgba8(rgba.clone().into());
         let image = PngImage::new(width, height, pixels, PngEncoding {
             color_mode: PngColorMode::Rgba,
             bit_depth: PngBitDepth::Eight,
@@ -136,7 +136,7 @@ proptest! {
         let mut image = PngImage::new(
             width,
             height,
-            PngPixels::from_rgba8(rgba.clone()),
+            PngPixels::Rgba8(rgba.clone().into()),
             PngEncoding {
                 color_mode: PngColorMode::Rgba,
                 bit_depth: PngBitDepth::Eight,
@@ -162,7 +162,7 @@ proptest! {
         let mut image = PngImage::new(
             width,
             height,
-            PngPixels::from_rgba8(rgba.clone()),
+            PngPixels::Rgba8(rgba.clone().into()),
             PngEncoding {
                 color_mode: PngColorMode::Rgba,
                 bit_depth: PngBitDepth::Eight,
@@ -185,7 +185,7 @@ proptest! {
 
     #[test]
     fn roundtrip_random_rgba_interlaced((width, height, rgba) in rgba_image_strategy(8, 8)) {
-        let pixels = PngPixels::from_rgba8(rgba.clone());
+        let pixels = PngPixels::Rgba8(rgba.clone().into());
         let image = PngImage::new(width, height, pixels, PngEncoding {
             color_mode: PngColorMode::Rgba,
             bit_depth: PngBitDepth::Eight,
@@ -202,7 +202,7 @@ proptest! {
 
     #[test]
     fn roundtrip_random_rgba16((width, height, samples) in rgba16_image_strategy(8, 8)) {
-        let pixels = PngPixels::from_rgba16(samples.clone());
+        let pixels = PngPixels::Rgba16(samples.clone().into());
         let image = PngImage::new(width, height, pixels, PngEncoding {
             color_mode: PngColorMode::Rgba,
             bit_depth: PngBitDepth::Sixteen,

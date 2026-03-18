@@ -32,8 +32,8 @@ Supported Decoding
 Decoded images are returned as `PngImage<'static>`.
 `PngImage` stores a `PngPixels` enum that preserves the source layout as closely as possible:
 
-- low-bit grayscale is returned as unpacked `Gray1/2/4`
-- indexed PNG is returned as `Indexed1/2/4/8`
+- low-bit grayscale is returned as unpacked `Gray { bit_depth, samples }`
+- indexed PNG is returned as `Indexed { bit_depth, indices, palette, trns }`
 - `tRNS` is reflected in the pixel representation
 - 16-bit PNG is returned as native `u16`-backed pixel data
 
@@ -80,7 +80,7 @@ fn convert(bytes: &[u8]) -> nopng::Result<Vec<u8>> {
 
 ```rust
 fn encode_borrowed_rgb(data: &[u8]) -> nopng::Result<Vec<u8>> {
-    let pixels = nopng::PngPixels::from_rgb8(data);
+    let pixels = nopng::PngPixels::infer_from_rgb8(data);
     let image = nopng::PngImage::new(
         2,
         1,

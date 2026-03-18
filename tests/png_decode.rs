@@ -139,7 +139,7 @@ fn decodes_rgba_interlaced() {
     assert_eq!(image.height(), 4);
     // Re-encode as non-interlaced and verify roundtrip.
     let rgba = rgba8(image.pixels());
-    let pixels = PngPixels::from_rgba8(rgba.clone());
+    let pixels = PngPixels::Rgba8(rgba.clone().into());
     let rt = PngImage::new(
         4,
         4,
@@ -162,10 +162,7 @@ fn decodes_palette_interlaced() {
         PngImage::from_bytes(include_bytes!("data/palette_interlaced.png")).expect("infallible");
     assert!(image.width() > 0);
     assert!(image.height() > 0);
-    assert_eq!(
-        image.pixels().color_mode(),
-        nopng::PngColorMode::Indexed
-    );
+    assert_eq!(image.pixels().color_mode(), nopng::PngColorMode::Indexed);
     // Verify we can roundtrip through RGBA.
     let rgba = rgba8(image.pixels());
     assert!(!rgba.is_empty());

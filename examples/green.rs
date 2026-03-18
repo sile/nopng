@@ -21,7 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let png_image = PngImage::new(
         width,
         height,
-        PngPixels::from_rgba8(data),
+        PngPixels::Rgba8(data.into()),
         PngEncoding {
             color_mode: PngColorMode::Rgba,
             bit_depth: PngBitDepth::Eight,

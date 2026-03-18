@@ -627,7 +627,10 @@ fn build_bitwidth_codes(
         .chain((0..distance_code_count).map(|symbol| distance.code_width(symbol as u16)))
     {
         if run_lengths.last().is_some_and(|run| run.value == width) {
-            run_lengths.last_mut().unwrap().count += 1;
+            run_lengths
+                .last_mut()
+                .expect("bug: run_lengths must be non-empty after last() check")
+                .count += 1;
         } else {
             run_lengths.push(RunLength {
                 value: width,
@@ -682,8 +685,12 @@ fn ordinary_huffman_optimal_max_bitwidth(frequencies: &[usize]) -> u8 {
         heap.push((-(frequency as isize), 0u8));
     }
     while heap.len() > 1 {
-        let (weight1, width1) = heap.pop().unwrap();
-        let (weight2, width2) = heap.pop().unwrap();
+        let (weight1, width1) = heap
+            .pop()
+            .expect("bug: heap must contain first node while len() > 1");
+        let (weight2, width2) = heap
+            .pop()
+            .expect("bug: heap must contain second node while len() > 1");
         heap.push((weight1 + weight2, 1 + cmp::max(width1, width2)));
     }
     cmp::max(1, heap.pop().map_or(0, |(_, width)| width))
@@ -763,10 +770,9 @@ fn package_merge_code_lengths(frequencies: &[usize], max_bitwidth: u8) -> Vec<u8
         .collect();
     source.sort_by_key(|node| node.weight);
 
-    let weighted =
-        (0..max_bitwidth.saturating_sub(1)).fold(source.clone(), |weighted, _| {
-            merge_nodes(package(&weighted, symbol_count), source.clone())
-        });
+    let weighted = (0..max_bitwidth.saturating_sub(1)).fold(source.clone(), |weighted, _| {
+        merge_nodes(package(&weighted, symbol_count), source.clone())
+    });
 
     let mut widths = vec![0u8; symbol_count];
     let packaged = package(&weighted, symbol_count);
@@ -978,7 +984,7 @@ mod tests {
     #[test]
     fn decode_known_fixed_block() {
         let input = [243, 72, 205, 201, 201, 87, 8, 207, 47, 202, 73, 81, 4, 0];
-        let decoded = decompress(&input).unwrap();
+        let decoded = decompress(&input).expect("infallible");
         assert_eq!(decoded, b"Hello World!");
     }
 
@@ -987,30 +993,30 @@ mod tests {
         let input = [
             1, 12, 0, 243, 255, 72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100, 33,
         ];
-        let decoded = decompress(&input).unwrap();
+        let decoded = decompress(&input).expect("infallible");
         assert_eq!(decoded, b"Hello World!");
     }
 
     #[test]
     fn decode_known_dynamic_block() {
         let input = [75, 76, 42, 74, 76, 78, 76, 73, 4, 82, 10, 137, 216, 217, 0];
-        let decoded = decompress(&input).unwrap();
+        let decoded = decompress(&input).expect("infallible");
         assert_eq!(decoded, b"abracadabra abracadabra abracadabra");
     }
 
     #[test]
     fn encode_dynamic_literals_roundtrip() {
         let input = b"banana banana banana banana";
-        let encoded = encode_dynamic_literals(input).unwrap();
-        let decoded = decompress(&encoded).unwrap();
+        let encoded = encode_dynamic_literals(input).expect("infallible");
+        let decoded = decompress(&encoded).expect("infallible");
         assert_eq!(decoded, input);
     }
 
     #[test]
     fn encode_dynamic_literals_uses_matches_for_repetition() {
         let input = vec![b'a'; 2048];
-        let encoded = encode_dynamic_literals(&input).unwrap();
-        let decoded = decompress(&encoded).unwrap();
+        let encoded = encode_dynamic_literals(&input).expect("infallible");
+        let decoded = decompress(&encoded).expect("infallible");
         assert_eq!(decoded, input);
         assert!(encoded.len() < 64);
     }

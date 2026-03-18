@@ -215,10 +215,7 @@ impl<'a> PngImage<'a> {
 }
 
 fn validate_encoding_compatibility(pixels: &PngPixels<'_>, encoding: &PngEncoding) -> Result<()> {
-    let is_16bit_pixels = matches!(
-        pixels.bit_depth(),
-        PngBitDepth::Sixteen
-    );
+    let is_16bit_pixels = matches!(pixels.bit_depth(), PngBitDepth::Sixteen);
     let is_16bit_encoding = encoding.bit_depth == PngBitDepth::Sixteen;
 
     // 16-bit pixels require 16-bit encoding and vice versa.
@@ -268,7 +265,7 @@ mod tests {
 
     #[test]
     fn roundtrip_rgba_writer_and_reader() {
-        let pixels = PngPixels::from_rgba8(vec![255, 0, 0, 255, 0, 255, 0, 128]);
+        let pixels = PngPixels::Rgba8(vec![255, 0, 0, 255, 0, 255, 0, 128].into());
         let image = PngImage::new(2, 1, pixels.clone(), PngEncoding::for_pixels(&pixels))
             .expect("infallible");
         let bytes = image.to_bytes().expect("infallible");
@@ -285,9 +282,12 @@ mod tests {
 
     #[test]
     fn write_to_uses_explicit_indexed_encoding() {
-        let pixels = PngPixels::from_rgba8(vec![
-            255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 255, 255, 255, 0, 64,
-        ]);
+        let pixels = PngPixels::Rgba8(
+            vec![
+                255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 255, 255, 255, 0, 64,
+            ]
+            .into(),
+        );
         let mut image = PngImage::new(4, 1, pixels.clone(), PngEncoding::for_pixels(&pixels))
             .expect("infallible");
         *image.encoding_mut() = PngEncoding {
@@ -316,7 +316,7 @@ mod tests {
         let image = PngImage::new(
             2,
             1,
-            PngPixels::from_rgb8(&data[..]),
+            PngPixels::Rgb8((&data[..]).into()),
             PngEncoding {
                 color_mode: PngColorMode::Rgb,
                 bit_depth: PngBitDepth::Eight,
@@ -341,7 +341,7 @@ mod tests {
         let error = PngImage::new(
             2,
             1,
-            PngPixels::from_rgba8(vec![0, 1, 2, 3]),
+            PngPixels::Rgba8(vec![0, 1, 2, 3].into()),
             PngEncoding {
                 color_mode: PngColorMode::Rgba,
                 bit_depth: PngBitDepth::Eight,
@@ -359,7 +359,12 @@ mod tests {
         let error = PngImage::new(
             2,
             1,
-            PngPixels::from_indexed2(vec![0, 4], vec![0, 0, 0, 255, 255, 255], None::<Vec<u8>>),
+            PngPixels::Indexed {
+                bit_depth: PngBitDepth::Two,
+                indices: vec![0, 4].into(),
+                palette: vec![0, 0, 0, 255, 255, 255].into(),
+                trns: None,
+            },
             PngEncoding {
                 color_mode: PngColorMode::Indexed,
                 bit_depth: PngBitDepth::Two,
@@ -375,7 +380,7 @@ mod tests {
         let image = PngImage::new(
             2,
             1,
-            PngPixels::from_rgba16(vec![0u16, 1, 2, 3, 65535, 32768, 16, 255]),
+            PngPixels::Rgba16(vec![0u16, 1, 2, 3, 65535, 32768, 16, 255].into()),
             PngEncoding {
                 color_mode: PngColorMode::Rgba,
                 bit_depth: PngBitDepth::Sixteen,
@@ -397,21 +402,31 @@ mod tests {
 
     #[test]
     fn new_rejects_zero_width() {
-        let error =
-            PngImage::new(0, 1, PngPixels::from_rgba8(vec![]), PngEncoding::default()).unwrap_err();
+        let error = PngImage::new(
+            0,
+            1,
+            PngPixels::Rgba8(vec![].into()),
+            PngEncoding::default(),
+        )
+        .unwrap_err();
         assert!(matches!(error, Error::InvalidData(message) if message.contains("non-zero")));
     }
 
     #[test]
     fn new_rejects_zero_height() {
-        let error =
-            PngImage::new(1, 0, PngPixels::from_rgba8(vec![]), PngEncoding::default()).unwrap_err();
+        let error = PngImage::new(
+            1,
+            0,
+            PngPixels::Rgba8(vec![].into()),
+            PngEncoding::default(),
+        )
+        .unwrap_err();
         assert!(matches!(error, Error::InvalidData(message) if message.contains("non-zero")));
     }
 
     #[test]
     fn roundtrip_1x1_rgba() {
-        let pixels = PngPixels::from_rgba8(vec![42, 128, 200, 255]);
+        let pixels = PngPixels::Rgba8(vec![42, 128, 200, 255].into());
         let image = PngImage::new(1, 1, pixels.clone(), PngEncoding::for_pixels(&pixels))
             .expect("infallible");
         let bytes = image.to_bytes().expect("infallible");
@@ -429,7 +444,7 @@ mod tests {
     #[test]
     fn roundtrip_grayscale_alpha() {
         let pixels =
-            PngPixels::from_gray_alpha8(vec![0, 255, 128, 64, 255, 128, 50, 200, 200, 100]);
+            PngPixels::GrayAlpha8(vec![0, 255, 128, 64, 255, 128, 50, 200, 200, 100].into());
         let image = PngImage::new(
             5,
             1,
@@ -455,9 +470,12 @@ mod tests {
 
     #[test]
     fn roundtrip_indexed_with_alpha() {
-        let pixels = PngPixels::from_rgba8(vec![
-            255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 0, 255, 255, 255, 64,
-        ]);
+        let pixels = PngPixels::Rgba8(
+            vec![
+                255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 0, 255, 255, 255, 64,
+            ]
+            .into(),
+        );
         let mut image = PngImage::new(2, 2, pixels.clone(), PngEncoding::for_pixels(&pixels))
             .expect("infallible");
         *image.encoding_mut() = PngEncoding {
@@ -479,7 +497,7 @@ mod tests {
 
     #[test]
     fn roundtrip_16bit_grayscale() {
-        let pixels = PngPixels::from_gray16(vec![0, 32768, 65535, 1000]);
+        let pixels = PngPixels::Gray16(vec![0, 32768, 65535, 1000].into());
         let image = PngImage::new(
             2,
             2,
@@ -505,8 +523,12 @@ mod tests {
         let indices = vec![0, 1, 2, 0, 1, 2];
         let palette = vec![255, 0, 0, 0, 255, 0, 0, 0, 255];
         let trns: Vec<u8> = vec![255, 128, 0];
-        let pixels =
-            PngPixels::from_indexed8(indices.clone(), palette.clone(), Some(trns.clone()));
+        let pixels = PngPixels::Indexed {
+            bit_depth: PngBitDepth::Eight,
+            indices: indices.clone().into(),
+            palette: palette.clone().into(),
+            trns: Some(trns.clone().into()),
+        };
         let image = PngImage::new(
             3,
             2,
@@ -535,7 +557,7 @@ mod tests {
         let error = PngImage::new(
             1,
             1,
-            PngPixels::from_rgba16(vec![0, 0, 0, 0]),
+            PngPixels::Rgba16(vec![0, 0, 0, 0].into()),
             PngEncoding {
                 color_mode: PngColorMode::Rgba,
                 bit_depth: PngBitDepth::Eight,

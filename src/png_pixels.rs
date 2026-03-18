@@ -1,4 +1,5 @@
 use alloc::borrow::Cow;
+use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::vec::Vec;
 
@@ -6,10 +7,10 @@ use crate::png_types::{Error, PngBitDepth, PngColorMode, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PngPixels<'a> {
-    Gray1(Cow<'a, [u8]>),
-    Gray2(Cow<'a, [u8]>),
-    Gray4(Cow<'a, [u8]>),
-    Gray8(Cow<'a, [u8]>),
+    Gray {
+        bit_depth: PngBitDepth,
+        samples: Cow<'a, [u8]>,
+    },
     Gray16(Cow<'a, [u16]>),
     GrayAlpha8(Cow<'a, [u8]>),
     GrayAlpha16(Cow<'a, [u16]>),
@@ -17,22 +18,8 @@ pub enum PngPixels<'a> {
     Rgb16(Cow<'a, [u16]>),
     Rgba8(Cow<'a, [u8]>),
     Rgba16(Cow<'a, [u16]>),
-    Indexed1 {
-        indices: Cow<'a, [u8]>,
-        palette: Cow<'a, [u8]>,
-        trns: Option<Cow<'a, [u8]>>,
-    },
-    Indexed2 {
-        indices: Cow<'a, [u8]>,
-        palette: Cow<'a, [u8]>,
-        trns: Option<Cow<'a, [u8]>>,
-    },
-    Indexed4 {
-        indices: Cow<'a, [u8]>,
-        palette: Cow<'a, [u8]>,
-        trns: Option<Cow<'a, [u8]>>,
-    },
-    Indexed8 {
+    Indexed {
+        bit_depth: PngBitDepth,
         indices: Cow<'a, [u8]>,
         palette: Cow<'a, [u8]>,
         trns: Option<Cow<'a, [u8]>>,
@@ -40,107 +27,62 @@ pub enum PngPixels<'a> {
 }
 
 impl<'a> PngPixels<'a> {
-    pub fn from_gray1(data: impl Into<Cow<'a, [u8]>>) -> Self {
-        Self::Gray1(data.into())
-    }
-
-    pub fn from_gray2(data: impl Into<Cow<'a, [u8]>>) -> Self {
-        Self::Gray2(data.into())
-    }
-
-    pub fn from_gray4(data: impl Into<Cow<'a, [u8]>>) -> Self {
-        Self::Gray4(data.into())
-    }
-
-    pub fn from_gray8(data: impl Into<Cow<'a, [u8]>>) -> Self {
-        Self::Gray8(data.into())
-    }
-
-    pub fn from_gray16(data: impl Into<Cow<'a, [u16]>>) -> Self {
-        Self::Gray16(data.into())
-    }
-
-    pub fn from_gray_alpha8(data: impl Into<Cow<'a, [u8]>>) -> Self {
-        Self::GrayAlpha8(data.into())
-    }
-
-    pub fn from_gray_alpha16(data: impl Into<Cow<'a, [u16]>>) -> Self {
-        Self::GrayAlpha16(data.into())
-    }
-
-    pub fn from_rgb8(data: impl Into<Cow<'a, [u8]>>) -> Self {
-        Self::Rgb8(data.into())
-    }
-
-    pub fn from_rgb16(data: impl Into<Cow<'a, [u16]>>) -> Self {
-        Self::Rgb16(data.into())
-    }
-
-    pub fn from_rgba8(data: impl Into<Cow<'a, [u8]>>) -> Self {
-        Self::Rgba8(data.into())
-    }
-
-    pub fn from_rgba16(data: impl Into<Cow<'a, [u16]>>) -> Self {
-        Self::Rgba16(data.into())
-    }
-
-    pub fn from_indexed1<I, P, T>(indices: I, palette: P, trns: Option<T>) -> Self
-    where
-        I: Into<Cow<'a, [u8]>>,
-        P: Into<Cow<'a, [u8]>>,
-        T: Into<Cow<'a, [u8]>>,
-    {
-        Self::Indexed1 {
-            indices: indices.into(),
-            palette: palette.into(),
-            trns: trns.map(Into::into),
+    pub fn infer_from_rgb8(data: impl Into<Cow<'a, [u8]>>) -> Self {
+        let data = data.into();
+        if rgb8_is_grayscale(data.as_ref()) {
+            let mut samples = Vec::with_capacity(data.len() / 3);
+            let (pixels, _) = data.as_ref().as_chunks::<3>();
+            for &[gray, _, _] in pixels {
+                samples.push(gray);
+            }
+            Self::Gray {
+                bit_depth: PngBitDepth::Eight,
+                samples: Cow::Owned(samples),
+            }
+        } else {
+            Self::Rgb8(data)
         }
     }
 
-    pub fn from_indexed2<I, P, T>(indices: I, palette: P, trns: Option<T>) -> Self
-    where
-        I: Into<Cow<'a, [u8]>>,
-        P: Into<Cow<'a, [u8]>>,
-        T: Into<Cow<'a, [u8]>>,
-    {
-        Self::Indexed2 {
-            indices: indices.into(),
-            palette: palette.into(),
-            trns: trns.map(Into::into),
+    pub fn infer_from_rgba8(data: impl Into<Cow<'a, [u8]>>) -> Self {
+        let data = data.into();
+        let bytes = data.as_ref();
+        if rgba8_is_opaque_grayscale(bytes) {
+            let mut samples = Vec::with_capacity(bytes.len() / 4);
+            let (pixels, _) = bytes.as_chunks::<4>();
+            for &[gray, _, _, _] in pixels {
+                samples.push(gray);
+            }
+            return Self::Gray {
+                bit_depth: PngBitDepth::Eight,
+                samples: Cow::Owned(samples),
+            };
         }
-    }
-
-    pub fn from_indexed4<I, P, T>(indices: I, palette: P, trns: Option<T>) -> Self
-    where
-        I: Into<Cow<'a, [u8]>>,
-        P: Into<Cow<'a, [u8]>>,
-        T: Into<Cow<'a, [u8]>>,
-    {
-        Self::Indexed4 {
-            indices: indices.into(),
-            palette: palette.into(),
-            trns: trns.map(Into::into),
+        if rgba8_is_grayscale(bytes) {
+            let mut gray_alpha = Vec::with_capacity(bytes.len() / 2);
+            let (pixels, _) = bytes.as_chunks::<4>();
+            for &[gray, _, _, alpha] in pixels {
+                gray_alpha.extend_from_slice(&[gray, alpha]);
+            }
+            return Self::GrayAlpha8(Cow::Owned(gray_alpha));
         }
-    }
-
-    pub fn from_indexed8<I, P, T>(indices: I, palette: P, trns: Option<T>) -> Self
-    where
-        I: Into<Cow<'a, [u8]>>,
-        P: Into<Cow<'a, [u8]>>,
-        T: Into<Cow<'a, [u8]>>,
-    {
-        Self::Indexed8 {
-            indices: indices.into(),
-            palette: palette.into(),
-            trns: trns.map(Into::into),
+        if rgba8_is_opaque(bytes) {
+            let mut rgb = Vec::with_capacity(bytes.len() / 4 * 3);
+            let (pixels, _) = bytes.as_chunks::<4>();
+            for &[r, g, b, _] in pixels {
+                rgb.extend_from_slice(&[r, g, b]);
+            }
+            return Self::Rgb8(Cow::Owned(rgb));
         }
+        if let Some(indexed) = infer_indexed_from_rgba8(bytes) {
+            return indexed;
+        }
+        Self::Rgba8(data)
     }
 
     pub fn pixel_count(&self) -> usize {
         match self {
-            Self::Gray1(data) | Self::Gray2(data) | Self::Gray4(data) | Self::Gray8(data) => {
-                data.len()
-            }
+            Self::Gray { samples, .. } => samples.len(),
             Self::Gray16(data) => data.len(),
             Self::GrayAlpha8(data) => data.len() / 2,
             Self::GrayAlpha16(data) => data.len() / 2,
@@ -148,53 +90,42 @@ impl<'a> PngPixels<'a> {
             Self::Rgb16(data) => data.len() / 3,
             Self::Rgba8(data) => data.len() / 4,
             Self::Rgba16(data) => data.len() / 4,
-            Self::Indexed1 { indices, .. }
-            | Self::Indexed2 { indices, .. }
-            | Self::Indexed4 { indices, .. }
-            | Self::Indexed8 { indices, .. } => indices.len(),
+            Self::Indexed { indices, .. } => indices.len(),
         }
     }
 
     pub fn color_mode(&self) -> PngColorMode {
         match self {
-            Self::Gray1(_) | Self::Gray2(_) | Self::Gray4(_) | Self::Gray8(_) | Self::Gray16(_) => {
-                PngColorMode::Grayscale
-            }
+            Self::Gray { .. } | Self::Gray16(_) => PngColorMode::Grayscale,
             Self::GrayAlpha8(_) | Self::GrayAlpha16(_) => PngColorMode::GrayscaleAlpha,
             Self::Rgb8(_) | Self::Rgb16(_) => PngColorMode::Rgb,
             Self::Rgba8(_) | Self::Rgba16(_) => PngColorMode::Rgba,
-            Self::Indexed1 { .. }
-            | Self::Indexed2 { .. }
-            | Self::Indexed4 { .. }
-            | Self::Indexed8 { .. } => PngColorMode::Indexed,
+            Self::Indexed { .. } => PngColorMode::Indexed,
         }
     }
 
     pub fn bit_depth(&self) -> PngBitDepth {
         match self {
-            Self::Gray1(_) | Self::Indexed1 { .. } => PngBitDepth::One,
-            Self::Gray2(_) | Self::Indexed2 { .. } => PngBitDepth::Two,
-            Self::Gray4(_) | Self::Indexed4 { .. } => PngBitDepth::Four,
-            Self::Gray8(_)
-            | Self::GrayAlpha8(_)
-            | Self::Rgb8(_)
-            | Self::Rgba8(_)
-            | Self::Indexed8 { .. } => PngBitDepth::Eight,
+            Self::Gray { bit_depth, .. } | Self::Indexed { bit_depth, .. } => *bit_depth,
             Self::Gray16(_) | Self::GrayAlpha16(_) | Self::Rgb16(_) | Self::Rgba16(_) => {
                 PngBitDepth::Sixteen
             }
+            Self::GrayAlpha8(_) | Self::Rgb8(_) | Self::Rgba8(_) => PngBitDepth::Eight,
         }
     }
 
     pub fn as_u8_slice(&self) -> Option<&[u8]> {
         match self {
-            Self::Gray1(data)
-            | Self::Gray2(data)
-            | Self::Gray4(data)
-            | Self::Gray8(data)
-            | Self::GrayAlpha8(data)
-            | Self::Rgb8(data)
-            | Self::Rgba8(data) => Some(data.as_ref()),
+            Self::Gray { samples, .. }
+            | Self::GrayAlpha8(samples)
+            | Self::Rgb8(samples)
+            | Self::Rgba8(samples) => Some(samples.as_ref()),
+            Self::Indexed {
+                indices,
+                palette: _,
+                trns: _,
+                ..
+            } => Some(indices.as_ref()),
             _ => None,
         }
     }
@@ -209,48 +140,18 @@ impl<'a> PngPixels<'a> {
         }
     }
 
-    pub fn indices(&self) -> Option<&[u8]> {
-        match self {
-            Self::Indexed1 { indices, .. }
-            | Self::Indexed2 { indices, .. }
-            | Self::Indexed4 { indices, .. }
-            | Self::Indexed8 { indices, .. } => Some(indices.as_ref()),
-            _ => None,
-        }
-    }
-
-    pub fn palette(&self) -> Option<&[u8]> {
-        match self {
-            Self::Indexed1 { palette, .. }
-            | Self::Indexed2 { palette, .. }
-            | Self::Indexed4 { palette, .. }
-            | Self::Indexed8 { palette, .. } => Some(palette.as_ref()),
-            _ => None,
-        }
-    }
-
-    pub fn trns(&self) -> Option<&[u8]> {
-        match self {
-            Self::Indexed1 { trns, .. }
-            | Self::Indexed2 { trns, .. }
-            | Self::Indexed4 { trns, .. }
-            | Self::Indexed8 { trns, .. } => trns.as_deref(),
-            _ => None,
-        }
-    }
-
     /// Creates a `'static` copy by cloning any borrowed data.
     ///
     /// Unlike [`Clone::clone`], which preserves the original lifetime, this
     /// method erases the lifetime parameter so the result can outlive the
-    /// borrowed source.  Use `clone()` when you need a copy with the same
+    /// borrowed source. Use `clone()` when you need a copy with the same
     /// lifetime and `to_owned()` when you need a `PngPixels<'static>`.
     pub fn to_owned(&self) -> PngPixels<'static> {
         match self {
-            Self::Gray1(data) => PngPixels::Gray1(Cow::Owned(data.to_vec())),
-            Self::Gray2(data) => PngPixels::Gray2(Cow::Owned(data.to_vec())),
-            Self::Gray4(data) => PngPixels::Gray4(Cow::Owned(data.to_vec())),
-            Self::Gray8(data) => PngPixels::Gray8(Cow::Owned(data.to_vec())),
+            Self::Gray { bit_depth, samples } => PngPixels::Gray {
+                bit_depth: *bit_depth,
+                samples: Cow::Owned(samples.to_vec()),
+            },
             Self::Gray16(data) => PngPixels::Gray16(Cow::Owned(data.to_vec())),
             Self::GrayAlpha8(data) => PngPixels::GrayAlpha8(Cow::Owned(data.to_vec())),
             Self::GrayAlpha16(data) => PngPixels::GrayAlpha16(Cow::Owned(data.to_vec())),
@@ -258,38 +159,13 @@ impl<'a> PngPixels<'a> {
             Self::Rgb16(data) => PngPixels::Rgb16(Cow::Owned(data.to_vec())),
             Self::Rgba8(data) => PngPixels::Rgba8(Cow::Owned(data.to_vec())),
             Self::Rgba16(data) => PngPixels::Rgba16(Cow::Owned(data.to_vec())),
-            Self::Indexed1 {
+            Self::Indexed {
+                bit_depth,
                 indices,
                 palette,
                 trns,
-            } => PngPixels::Indexed1 {
-                indices: Cow::Owned(indices.to_vec()),
-                palette: Cow::Owned(palette.to_vec()),
-                trns: trns.as_ref().map(|value| Cow::Owned(value.to_vec())),
-            },
-            Self::Indexed2 {
-                indices,
-                palette,
-                trns,
-            } => PngPixels::Indexed2 {
-                indices: Cow::Owned(indices.to_vec()),
-                palette: Cow::Owned(palette.to_vec()),
-                trns: trns.as_ref().map(|value| Cow::Owned(value.to_vec())),
-            },
-            Self::Indexed4 {
-                indices,
-                palette,
-                trns,
-            } => PngPixels::Indexed4 {
-                indices: Cow::Owned(indices.to_vec()),
-                palette: Cow::Owned(palette.to_vec()),
-                trns: trns.as_ref().map(|value| Cow::Owned(value.to_vec())),
-            },
-            Self::Indexed8 {
-                indices,
-                palette,
-                trns,
-            } => PngPixels::Indexed8 {
+            } => PngPixels::Indexed {
+                bit_depth: *bit_depth,
                 indices: Cow::Owned(indices.to_vec()),
                 palette: Cow::Owned(palette.to_vec()),
                 trns: trns.as_ref().map(|value| Cow::Owned(value.to_vec())),
@@ -299,10 +175,10 @@ impl<'a> PngPixels<'a> {
 
     pub fn into_owned(self) -> PngPixels<'static> {
         match self {
-            Self::Gray1(data) => PngPixels::Gray1(Cow::Owned(data.into_owned())),
-            Self::Gray2(data) => PngPixels::Gray2(Cow::Owned(data.into_owned())),
-            Self::Gray4(data) => PngPixels::Gray4(Cow::Owned(data.into_owned())),
-            Self::Gray8(data) => PngPixels::Gray8(Cow::Owned(data.into_owned())),
+            Self::Gray { bit_depth, samples } => PngPixels::Gray {
+                bit_depth,
+                samples: Cow::Owned(samples.into_owned()),
+            },
             Self::Gray16(data) => PngPixels::Gray16(Cow::Owned(data.into_owned())),
             Self::GrayAlpha8(data) => PngPixels::GrayAlpha8(Cow::Owned(data.into_owned())),
             Self::GrayAlpha16(data) => PngPixels::GrayAlpha16(Cow::Owned(data.into_owned())),
@@ -310,38 +186,13 @@ impl<'a> PngPixels<'a> {
             Self::Rgb16(data) => PngPixels::Rgb16(Cow::Owned(data.into_owned())),
             Self::Rgba8(data) => PngPixels::Rgba8(Cow::Owned(data.into_owned())),
             Self::Rgba16(data) => PngPixels::Rgba16(Cow::Owned(data.into_owned())),
-            Self::Indexed1 {
+            Self::Indexed {
+                bit_depth,
                 indices,
                 palette,
                 trns,
-            } => PngPixels::Indexed1 {
-                indices: Cow::Owned(indices.into_owned()),
-                palette: Cow::Owned(palette.into_owned()),
-                trns: trns.map(|value| Cow::Owned(value.into_owned())),
-            },
-            Self::Indexed2 {
-                indices,
-                palette,
-                trns,
-            } => PngPixels::Indexed2 {
-                indices: Cow::Owned(indices.into_owned()),
-                palette: Cow::Owned(palette.into_owned()),
-                trns: trns.map(|value| Cow::Owned(value.into_owned())),
-            },
-            Self::Indexed4 {
-                indices,
-                palette,
-                trns,
-            } => PngPixels::Indexed4 {
-                indices: Cow::Owned(indices.into_owned()),
-                palette: Cow::Owned(palette.into_owned()),
-                trns: trns.map(|value| Cow::Owned(value.into_owned())),
-            },
-            Self::Indexed8 {
-                indices,
-                palette,
-                trns,
-            } => PngPixels::Indexed8 {
+            } => PngPixels::Indexed {
+                bit_depth,
                 indices: Cow::Owned(indices.into_owned()),
                 palette: Cow::Owned(palette.into_owned()),
                 trns: trns.map(|value| Cow::Owned(value.into_owned())),
@@ -350,7 +201,10 @@ impl<'a> PngPixels<'a> {
     }
 
     pub fn to_gray8(&self) -> PngPixels<'static> {
-        PngPixels::Gray8(Cow::Owned(self.to_gray8_vec()))
+        PngPixels::Gray {
+            bit_depth: PngBitDepth::Eight,
+            samples: Cow::Owned(self.to_gray8_vec()),
+        }
     }
 
     pub fn to_gray16(&self) -> PngPixels<'static> {
@@ -375,19 +229,16 @@ impl<'a> PngPixels<'a> {
 
     pub(crate) fn to_gray8_vec(&self) -> Vec<u8> {
         match self {
-            Self::Gray1(data) => data
-                .iter()
-                .map(|&sample| scale_sample_to_u8(u16::from(sample), 1))
-                .collect(),
-            Self::Gray2(data) => data
-                .iter()
-                .map(|&sample| scale_sample_to_u8(u16::from(sample), 2))
-                .collect(),
-            Self::Gray4(data) => data
-                .iter()
-                .map(|&sample| scale_sample_to_u8(u16::from(sample), 4))
-                .collect(),
-            Self::Gray8(data) => data.to_vec(),
+            Self::Gray { bit_depth, samples } => {
+                if *bit_depth == PngBitDepth::Eight {
+                    samples.to_vec()
+                } else {
+                    samples
+                        .iter()
+                        .map(|&sample| scale_sample_to_u8(u16::from(sample), bit_depth.as_u8()))
+                        .collect()
+                }
+            }
             Self::Gray16(data) => data.iter().copied().map(downsample_u16).collect(),
             Self::GrayAlpha8(data) => {
                 let (pairs, remainder) = data.as_chunks::<2>();
@@ -406,10 +257,7 @@ impl<'a> PngPixels<'a> {
             | Self::Rgb16(_)
             | Self::Rgba8(_)
             | Self::Rgba16(_)
-            | Self::Indexed1 { .. }
-            | Self::Indexed2 { .. }
-            | Self::Indexed4 { .. }
-            | Self::Indexed8 { .. } => {
+            | Self::Indexed { .. } => {
                 let rgba = self.to_rgba8_vec();
                 let (pixels, remainder) = rgba.as_chunks::<4>();
                 debug_assert!(remainder.is_empty());
@@ -450,13 +298,7 @@ impl<'a> PngPixels<'a> {
         match self {
             Self::Rgb8(data) => data.to_vec(),
             Self::Rgb16(data) => data.iter().copied().map(downsample_u16).collect(),
-            Self::Gray1(_)
-            | Self::Gray2(_)
-            | Self::Gray4(_)
-            | Self::Gray8(_)
-            | Self::Gray16(_)
-            | Self::GrayAlpha8(_)
-            | Self::GrayAlpha16(_) => {
+            Self::Gray { .. } | Self::Gray16(_) | Self::GrayAlpha8(_) | Self::GrayAlpha16(_) => {
                 let gray = self.to_gray8_vec();
                 let mut rgb = Vec::with_capacity(gray.len() * 3);
                 for value in gray {
@@ -482,10 +324,7 @@ impl<'a> PngPixels<'a> {
                     })
                     .collect()
             }
-            Self::Indexed1 { .. }
-            | Self::Indexed2 { .. }
-            | Self::Indexed4 { .. }
-            | Self::Indexed8 { .. } => {
+            Self::Indexed { .. } => {
                 let rgba = self.to_rgba8_vec();
                 let (pixels, remainder) = rgba.as_chunks::<4>();
                 debug_assert!(remainder.is_empty());
@@ -543,7 +382,7 @@ impl<'a> PngPixels<'a> {
                 }
                 rgba
             }
-            Self::Gray1(_) | Self::Gray2(_) | Self::Gray4(_) | Self::Gray8(_) | Self::Gray16(_) => {
+            Self::Gray { .. } | Self::Gray16(_) => {
                 let gray = self.to_gray8_vec();
                 let mut rgba = Vec::with_capacity(gray.len() * 4);
                 for value in gray {
@@ -574,10 +413,7 @@ impl<'a> PngPixels<'a> {
                 }
                 rgba
             }
-            Self::Indexed1 { .. }
-            | Self::Indexed2 { .. }
-            | Self::Indexed4 { .. }
-            | Self::Indexed8 { .. } => indexed_to_rgba8(self),
+            Self::Indexed { .. } => indexed_to_rgba8(self),
         }
     }
 
@@ -618,39 +454,100 @@ impl<'a> PngPixels<'a> {
     }
 }
 
+fn rgb8_is_grayscale(data: &[u8]) -> bool {
+    let (pixels, _) = data.as_chunks::<3>();
+    pixels.iter().all(|[r, g, b]| r == g && g == b)
+}
+
+fn rgba8_is_grayscale(data: &[u8]) -> bool {
+    let (pixels, _) = data.as_chunks::<4>();
+    pixels.iter().all(|[r, g, b, _]| r == g && g == b)
+}
+
+fn rgba8_is_opaque(data: &[u8]) -> bool {
+    let (pixels, _) = data.as_chunks::<4>();
+    pixels.iter().all(|[_, _, _, alpha]| *alpha == 255)
+}
+
+fn rgba8_is_opaque_grayscale(data: &[u8]) -> bool {
+    rgba8_is_grayscale(data) && rgba8_is_opaque(data)
+}
+
+fn infer_indexed_from_rgba8(data: &[u8]) -> Option<PngPixels<'static>> {
+    let (pixels, _) = data.as_chunks::<4>();
+    let mut map = BTreeMap::<[u8; 4], u8>::new();
+    let mut palette = Vec::new();
+    let mut trns = Vec::new();
+    let mut indices = Vec::with_capacity(pixels.len());
+    for &[r, g, b, a] in pixels {
+        let color = [r, g, b, a];
+        let index = if let Some(&index) = map.get(&color) {
+            index
+        } else {
+            let next = u8::try_from(map.len()).ok()?;
+            if map.len() == 256 {
+                return None;
+            }
+            map.insert(color, next);
+            palette.extend_from_slice(&[r, g, b]);
+            trns.push(a);
+            next
+        };
+        indices.push(index);
+    }
+    Some(PngPixels::Indexed {
+        bit_depth: PngBitDepth::Eight,
+        indices: Cow::Owned(indices),
+        palette: Cow::Owned(palette),
+        trns: Some(Cow::Owned(trns)),
+    })
+}
+
 pub(crate) fn validate_pixels(pixels: &PngPixels<'_>) -> Result<()> {
     match pixels {
-        PngPixels::Gray1(data) => validate_sample_range(data, 1, "Gray1"),
-        PngPixels::Gray2(data) => validate_sample_range(data, 2, "Gray2"),
-        PngPixels::Gray4(data) => validate_sample_range(data, 4, "Gray4"),
-        PngPixels::Gray8(_)
-        | PngPixels::Gray16(_)
+        PngPixels::Gray { bit_depth, samples } => {
+            validate_gray_bit_depth(*bit_depth)?;
+            if *bit_depth == PngBitDepth::Sixteen {
+                return Err(Error::InvalidData(
+                    "Gray uses 8-bit storage; use Gray16 for 16-bit grayscale pixels".into(),
+                ));
+            }
+            validate_sample_range(samples, bit_depth.as_u8(), "Gray")
+        }
+        PngPixels::Gray16(_)
         | PngPixels::GrayAlpha8(_)
         | PngPixels::GrayAlpha16(_)
         | PngPixels::Rgb8(_)
         | PngPixels::Rgb16(_)
         | PngPixels::Rgba8(_)
         | PngPixels::Rgba16(_) => Ok(()),
-        PngPixels::Indexed1 {
+        PngPixels::Indexed {
+            bit_depth,
             indices,
             palette,
             trns,
-        } => validate_indexed_pixels(indices, palette, trns.as_deref(), 1),
-        PngPixels::Indexed2 {
-            indices,
-            palette,
-            trns,
-        } => validate_indexed_pixels(indices, palette, trns.as_deref(), 2),
-        PngPixels::Indexed4 {
-            indices,
-            palette,
-            trns,
-        } => validate_indexed_pixels(indices, palette, trns.as_deref(), 4),
-        PngPixels::Indexed8 {
-            indices,
-            palette,
-            trns,
-        } => validate_indexed_pixels(indices, palette, trns.as_deref(), 8),
+        } => {
+            validate_indexed_bit_depth(*bit_depth)?;
+            validate_indexed_pixels(indices, palette, trns.as_deref(), bit_depth.as_u8())
+        }
+    }
+}
+
+fn validate_gray_bit_depth(bit_depth: PngBitDepth) -> Result<()> {
+    match bit_depth {
+        PngBitDepth::One | PngBitDepth::Two | PngBitDepth::Four | PngBitDepth::Eight => Ok(()),
+        PngBitDepth::Sixteen => Err(Error::InvalidData(
+            "Gray uses unpacked u8 samples and does not support 16-bit depth".into(),
+        )),
+    }
+}
+
+fn validate_indexed_bit_depth(bit_depth: PngBitDepth) -> Result<()> {
+    match bit_depth {
+        PngBitDepth::One | PngBitDepth::Two | PngBitDepth::Four | PngBitDepth::Eight => Ok(()),
+        PngBitDepth::Sixteen => Err(Error::InvalidData(
+            "indexed pixels do not support 16-bit depth".into(),
+        )),
     }
 }
 
@@ -713,34 +610,20 @@ fn validate_indexed_pixels(
 
 pub(crate) fn indexed_to_rgba8(pixels: &PngPixels<'_>) -> Vec<u8> {
     let (indices, palette, trns) = match pixels {
-        PngPixels::Indexed1 {
+        PngPixels::Indexed {
             indices,
             palette,
             trns,
-        }
-        | PngPixels::Indexed2 {
-            indices,
-            palette,
-            trns,
-        }
-        | PngPixels::Indexed4 {
-            indices,
-            palette,
-            trns,
-        }
-        | PngPixels::Indexed8 {
-            indices,
-            palette,
-            trns,
+            ..
         } => (indices.as_ref(), palette.as_ref(), trns.as_deref()),
-        _ => unreachable!(),
+        _ => unreachable!("bug: indexed_to_rgba8 requires indexed pixels"),
     };
     let mut rgba = Vec::with_capacity(indices.len() * 4);
     for &index in indices {
-        let rgb_index = index as usize * 3;
+        let rgb_index = usize::from(index) * 3;
         let rgb = &palette[rgb_index..rgb_index + 3];
         let alpha = trns
-            .and_then(|table| table.get(index as usize))
+            .and_then(|table| table.get(usize::from(index)))
             .copied()
             .unwrap_or(255);
         rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], alpha]);

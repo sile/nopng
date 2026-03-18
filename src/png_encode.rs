@@ -47,9 +47,18 @@ impl EncodedImage {
         pixels: &PngPixels<'_>,
         encoding: PngEncoding,
     ) -> Option<Result<Self>> {
-        let indices = pixels.indices()?;
-        let flat_palette = pixels.palette()?;
-        let trns = pixels.trns();
+        let PngPixels::Indexed {
+            indices,
+            palette: flat_palette,
+            trns,
+            ..
+        } = pixels
+        else {
+            return None;
+        };
+        let indices = indices.as_ref();
+        let flat_palette = flat_palette.as_ref();
+        let trns = trns.as_deref();
 
         if flat_palette.is_empty() || !flat_palette.len().is_multiple_of(3) {
             return None;
@@ -61,10 +70,11 @@ impl EncodedImage {
             return None;
         }
 
-        let palette: Vec<[u8; 3]> = flat_palette
-            .chunks_exact(3)
-            .map(|chunk| [chunk[0], chunk[1], chunk[2]])
-            .collect();
+        let (palette_chunks, remainder) = flat_palette.as_chunks::<3>();
+        if !remainder.is_empty() {
+            return None;
+        }
+        let palette: Vec<[u8; 3]> = palette_chunks.to_vec();
         let trns_vec = trns.map(|t| t.to_vec());
 
         let bpp = 1usize; // Indexed always 1 byte per pixel for filter purposes.
@@ -368,7 +378,11 @@ fn build_filtered_data(
         raw_row.clear();
         let row_pixels = &pixels[row * width as usize..(row + 1) * width as usize];
         encode_row_into(&mut raw_row, row_pixels, target)?;
-        let prev = if row == 0 { None } else { Some(prev_row.as_slice()) };
+        let prev = if row == 0 {
+            None
+        } else {
+            Some(prev_row.as_slice())
+        };
         write_filtered_row(&mut filtered, &raw_row, prev, bpp);
         prev_row.clear();
         prev_row.extend_from_slice(&raw_row);
@@ -403,7 +417,11 @@ fn build_adam7_filtered_data(
                 pixels[y * width as usize + x]
             }));
             encode_row_into(&mut raw_row, &pass_row_pixels, target)?;
-            let prev = if pass_y == 0 { None } else { Some(prev_row.as_slice()) };
+            let prev = if pass_y == 0 {
+                None
+            } else {
+                Some(prev_row.as_slice())
+            };
             write_filtered_row(&mut filtered, &raw_row, prev, bpp);
             prev_row.clear();
             prev_row.extend_from_slice(&raw_row);
@@ -492,7 +510,11 @@ fn build_filtered_data16(
         raw_row.clear();
         let row_pixels = &pixels[row * width as usize..(row + 1) * width as usize];
         encode_row16_into(&mut raw_row, row_pixels, target);
-        let prev = if row == 0 { None } else { Some(prev_row.as_slice()) };
+        let prev = if row == 0 {
+            None
+        } else {
+            Some(prev_row.as_slice())
+        };
         write_filtered_row(&mut filtered, &raw_row, prev, bpp);
         prev_row.clear();
         prev_row.extend_from_slice(&raw_row);
@@ -527,7 +549,11 @@ fn build_adam7_filtered_data16(
                 pixels[y * width as usize + x]
             }));
             encode_row16_into(&mut raw_row, &pass_row_pixels, target);
-            let prev = if pass_y == 0 { None } else { Some(prev_row.as_slice()) };
+            let prev = if pass_y == 0 {
+                None
+            } else {
+                Some(prev_row.as_slice())
+            };
             write_filtered_row(&mut filtered, &raw_row, prev, bpp);
             prev_row.clear();
             prev_row.extend_from_slice(&raw_row);
@@ -580,10 +606,15 @@ fn write_filtered_row(out: &mut Vec<u8>, raw: &[u8], prev: Option<&[u8]>, bpp: u
         })
         .sum();
 
-    let (best_filter, best_cost) = [(0u8, none_cost), (1, sub_cost), (2, up_cost), (4, paeth_cost)]
-        .into_iter()
-        .min_by_key(|&(_, cost)| cost)
-        .unwrap();
+    let (best_filter, best_cost) = [
+        (0u8, none_cost),
+        (1, sub_cost),
+        (2, up_cost),
+        (4, paeth_cost),
+    ]
+    .into_iter()
+    .min_by_key(|&(_, cost)| cost)
+    .expect("bug: filter candidate set must be non-empty");
 
     out.reserve(1 + raw.len());
     out.push(best_filter);
