@@ -78,6 +78,8 @@ impl PngRgbaImage {
         let mut cursor = Cursor::new(&bytes[PNG_SIGNATURE.len()..]);
         let mut header = None;
         let mut idat_data = Vec::new();
+        let mut ancillary = AncillaryChunks::default();
+        let mut seen_idat = false;
         let mut seen_iend = false;
 
         while cursor.remaining() > 0 {
@@ -102,7 +104,37 @@ impl PngRgbaImage {
                     if header.is_some() {
                         return Err(PngDecodeError::InvalidChunk("duplicate IHDR chunk".into()));
                     }
+                    if seen_idat {
+                        return Err(PngDecodeError::InvalidChunk("IHDR chunk after IDAT".into()));
+                    }
                     header = Some(PngHeader::parse(chunk_data)?);
+                }
+                b"PLTE" => {
+                    let Some(header) = header else {
+                        return Err(PngDecodeError::InvalidChunk(
+                            "PLTE chunk before IHDR".into(),
+                        ));
+                    };
+                    if seen_idat {
+                        return Err(PngDecodeError::InvalidChunk(
+                            "PLTE appears after IDAT".into(),
+                        ));
+                    }
+                    ancillary.set_palette(parse_palette(chunk_data, header.color_type)?)?;
+                }
+                b"tRNS" => {
+                    let Some(header) = header else {
+                        return Err(PngDecodeError::InvalidChunk(
+                            "tRNS chunk before IHDR".into(),
+                        ));
+                    };
+                    if seen_idat {
+                        return Err(PngDecodeError::InvalidChunk(
+                            "tRNS appears after IDAT".into(),
+                        ));
+                    }
+                    ancillary
+                        .set_transparency(parse_transparency(chunk_data, &header, &ancillary)?)?;
                 }
                 b"IDAT" => {
                     if header.is_none() {
@@ -110,6 +142,7 @@ impl PngRgbaImage {
                             "IDAT chunk before IHDR".into(),
                         ));
                     }
+                    seen_idat = true;
                     idat_data.extend_from_slice(chunk_data);
                 }
                 b"IEND" => {
@@ -128,10 +161,11 @@ impl PngRgbaImage {
         if idat_data.is_empty() {
             return Err(PngDecodeError::InvalidChunk("missing IDAT chunk".into()));
         }
+        ancillary.validate(&header)?;
 
         let filtered = decompress_zlib(&idat_data)?;
         let raw = unfilter_scanlines(&header, &filtered)?;
-        let rgba = convert_to_rgba(&header, &raw)?;
+        let rgba = convert_to_rgba(&header, &raw, &ancillary)?;
         Self::new(header.width, header.height, rgba)
             .ok_or_else(|| PngDecodeError::InvalidData("decoded image size mismatch".into()))
     }
@@ -228,10 +262,7 @@ impl PngHeader {
             )));
         }
         match (self.color_type, self.bit_depth) {
-            (0, 8) | (2, 8) | (4, 8) | (6, 8) => Ok(()),
-            (3, _) => Err(PngDecodeError::Unsupported(
-                "palette PNG is not supported yet".into(),
-            )),
+            (0, 1 | 2 | 4 | 8) | (3, 1 | 2 | 4 | 8) | (2, 8) | (4, 8) | (6, 8) => Ok(()),
             _ => Err(PngDecodeError::Unsupported(format!(
                 "unsupported color type/bit depth combination: color_type={}, bit_depth={}",
                 self.color_type, self.bit_depth
@@ -239,9 +270,9 @@ impl PngHeader {
         }
     }
 
-    fn bytes_per_pixel(&self) -> usize {
+    fn samples_per_pixel(&self) -> usize {
         match self.color_type {
-            0 => 1,
+            0 | 3 => 1,
             2 => 3,
             4 => 2,
             6 => 4,
@@ -249,10 +280,152 @@ impl PngHeader {
         }
     }
 
-    fn stride(&self) -> Result<usize, PngDecodeError> {
-        self.bytes_per_pixel()
-            .checked_mul(self.width as usize)
+    fn bits_per_pixel(&self) -> usize {
+        self.samples_per_pixel() * usize::from(self.bit_depth)
+    }
+
+    fn bytes_per_pixel(&self) -> usize {
+        self.bits_per_pixel().div_ceil(8)
+    }
+
+    fn packed_stride(&self) -> Result<usize, PngDecodeError> {
+        (self.width as usize)
+            .checked_mul(self.bits_per_pixel())
+            .map(|bits| bits.div_ceil(8))
             .ok_or_else(|| PngDecodeError::InvalidData("scanline stride overflow".into()))
+    }
+
+    fn filter_bpp(&self) -> usize {
+        if self.bit_depth < 8 {
+            1
+        } else {
+            self.bytes_per_pixel()
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Transparency {
+    Grayscale(u8),
+    Palette(Vec<u8>),
+}
+
+#[derive(Debug, Clone, Default)]
+struct AncillaryChunks {
+    palette: Option<Vec<[u8; 3]>>,
+    transparency: Option<Transparency>,
+}
+
+impl AncillaryChunks {
+    fn set_palette(&mut self, palette: Vec<[u8; 3]>) -> Result<(), PngDecodeError> {
+        if self.palette.is_some() {
+            return Err(PngDecodeError::InvalidChunk("duplicate PLTE chunk".into()));
+        }
+        self.palette = Some(palette);
+        Ok(())
+    }
+
+    fn set_transparency(&mut self, transparency: Transparency) -> Result<(), PngDecodeError> {
+        if self.transparency.is_some() {
+            return Err(PngDecodeError::InvalidChunk("duplicate tRNS chunk".into()));
+        }
+        self.transparency = Some(transparency);
+        Ok(())
+    }
+
+    fn validate(&self, header: &PngHeader) -> Result<(), PngDecodeError> {
+        if header.color_type == 3 && self.palette.is_none() {
+            return Err(PngDecodeError::InvalidChunk(
+                "missing PLTE for palette image".into(),
+            ));
+        }
+        if header.color_type != 3 && self.palette.is_some() {
+            return Err(PngDecodeError::InvalidChunk(
+                "PLTE chunk is only supported for palette images".into(),
+            ));
+        }
+        match (&self.transparency, header.color_type) {
+            (Some(Transparency::Grayscale(_)), 0) => {}
+            (Some(Transparency::Palette(alpha)), 3) => {
+                let palette_len = self.palette.as_ref().map_or(0, Vec::len);
+                if alpha.len() > palette_len {
+                    return Err(PngDecodeError::InvalidChunk(
+                        "tRNS length exceeds palette length".into(),
+                    ));
+                }
+            }
+            (Some(_), _) => {
+                return Err(PngDecodeError::InvalidChunk(format!(
+                    "tRNS is not allowed for color type {}",
+                    header.color_type
+                )));
+            }
+            (None, _) => {}
+        }
+        Ok(())
+    }
+}
+
+fn parse_palette(chunk_data: &[u8], color_type: u8) -> Result<Vec<[u8; 3]>, PngDecodeError> {
+    if color_type != 3 {
+        return Err(PngDecodeError::InvalidChunk(format!(
+            "PLTE is not allowed for color type {}",
+            color_type
+        )));
+    }
+    if chunk_data.is_empty() || !chunk_data.len().is_multiple_of(3) {
+        return Err(PngDecodeError::InvalidChunk(
+            "PLTE length must be a non-zero multiple of 3".into(),
+        ));
+    }
+    let palette = chunk_data
+        .chunks_exact(3)
+        .map(|chunk| [chunk[0], chunk[1], chunk[2]])
+        .collect::<Vec<_>>();
+    if palette.len() > 256 {
+        return Err(PngDecodeError::InvalidChunk(
+            "PLTE must not contain more than 256 entries".into(),
+        ));
+    }
+    Ok(palette)
+}
+
+fn parse_transparency(
+    chunk_data: &[u8],
+    header: &PngHeader,
+    ancillary: &AncillaryChunks,
+) -> Result<Transparency, PngDecodeError> {
+    match header.color_type {
+        0 => {
+            if chunk_data.len() != 2 {
+                return Err(PngDecodeError::InvalidChunk(
+                    "grayscale tRNS chunk must contain 2 bytes".into(),
+                ));
+            }
+            let sample = u16::from_be_bytes([chunk_data[0], chunk_data[1]]);
+            let max = (1u16 << header.bit_depth) - 1;
+            if sample > max {
+                return Err(PngDecodeError::InvalidChunk(
+                    "invalid grayscale transparency sample".into(),
+                ));
+            }
+            Ok(Transparency::Grayscale(scale_sample_to_u8(
+                sample,
+                header.bit_depth,
+            )))
+        }
+        3 => {
+            if ancillary.palette.is_none() {
+                return Err(PngDecodeError::InvalidChunk(
+                    "tRNS chunk must appear after PLTE".into(),
+                ));
+            }
+            Ok(Transparency::Palette(chunk_data.to_vec()))
+        }
+        _ => Err(PngDecodeError::InvalidChunk(format!(
+            "tRNS is not allowed for color type {}",
+            header.color_type
+        ))),
     }
 }
 
@@ -302,7 +475,7 @@ fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>, PngDecodeError> {
 }
 
 fn unfilter_scanlines(header: &PngHeader, filtered: &[u8]) -> Result<Vec<u8>, PngDecodeError> {
-    let stride = header.stride()?;
+    let stride = header.packed_stride()?;
     let expected_len = (stride + 1)
         .checked_mul(header.height as usize)
         .ok_or_else(|| PngDecodeError::InvalidData("filtered data size overflow".into()))?;
@@ -314,7 +487,7 @@ fn unfilter_scanlines(header: &PngHeader, filtered: &[u8]) -> Result<Vec<u8>, Pn
         )));
     }
 
-    let bpp = header.bytes_per_pixel();
+    let bpp = header.filter_bpp();
     let mut raw = vec![0; stride * header.height as usize];
     for row in 0..header.height as usize {
         let filter = filtered[row * (stride + 1)];
@@ -371,31 +544,114 @@ fn unfilter_scanlines(header: &PngHeader, filtered: &[u8]) -> Result<Vec<u8>, Pn
     Ok(raw)
 }
 
-fn convert_to_rgba(header: &PngHeader, raw: &[u8]) -> Result<Vec<u8>, PngDecodeError> {
+fn convert_to_rgba(
+    header: &PngHeader,
+    raw: &[u8],
+    ancillary: &AncillaryChunks,
+) -> Result<Vec<u8>, PngDecodeError> {
     let pixel_count = (header.width as usize)
         .checked_mul(header.height as usize)
         .ok_or_else(|| PngDecodeError::InvalidData("pixel count overflow".into()))?;
     let mut rgba = Vec::with_capacity(pixel_count * 4);
-    match header.color_type {
-        0 => {
+    match (header.color_type, header.bit_depth) {
+        (0, 1 | 2 | 4) => decode_grayscale_packed(header, raw, ancillary, &mut rgba)?,
+        (0, 8) => {
+            let transparent = match ancillary.transparency {
+                Some(Transparency::Grayscale(value)) => Some(value),
+                _ => None,
+            };
             for &gray in raw {
-                rgba.extend_from_slice(&[gray, gray, gray, 255]);
+                let alpha = if Some(gray) == transparent { 0 } else { 255 };
+                rgba.extend_from_slice(&[gray, gray, gray, alpha]);
             }
         }
-        2 => {
+        (2, 8) => {
             for chunk in raw.chunks_exact(3) {
                 rgba.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 255]);
             }
         }
-        4 => {
+        (3, 1 | 2 | 4 | 8) => decode_palette(header, raw, ancillary, &mut rgba)?,
+        (4, 8) => {
             for chunk in raw.chunks_exact(2) {
                 rgba.extend_from_slice(&[chunk[0], chunk[0], chunk[0], chunk[1]]);
             }
         }
-        6 => rgba.extend_from_slice(raw),
+        (6, 8) => rgba.extend_from_slice(raw),
         _ => unreachable!(),
     }
     Ok(rgba)
+}
+
+fn decode_grayscale_packed(
+    header: &PngHeader,
+    raw: &[u8],
+    ancillary: &AncillaryChunks,
+    rgba: &mut Vec<u8>,
+) -> Result<(), PngDecodeError> {
+    let transparent = match ancillary.transparency {
+        Some(Transparency::Grayscale(value)) => Some(value),
+        _ => None,
+    };
+    let row_stride = header.packed_stride()?;
+    for row in raw.chunks_exact(row_stride) {
+        for gray in unpack_samples(row, header.width as usize, header.bit_depth) {
+            let gray = scale_sample_to_u8(u16::from(gray), header.bit_depth);
+            let alpha = if Some(gray) == transparent { 0 } else { 255 };
+            rgba.extend_from_slice(&[gray, gray, gray, alpha]);
+        }
+    }
+    Ok(())
+}
+
+fn decode_palette(
+    header: &PngHeader,
+    raw: &[u8],
+    ancillary: &AncillaryChunks,
+    rgba: &mut Vec<u8>,
+) -> Result<(), PngDecodeError> {
+    let palette = ancillary
+        .palette
+        .as_ref()
+        .ok_or_else(|| PngDecodeError::InvalidChunk("missing PLTE for palette image".into()))?;
+    let alpha = match ancillary.transparency.as_ref() {
+        Some(Transparency::Palette(alpha)) => Some(alpha.as_slice()),
+        _ => None,
+    };
+    let row_stride = header.packed_stride()?;
+    for row in raw.chunks_exact(row_stride) {
+        for index in unpack_samples(row, header.width as usize, header.bit_depth) {
+            let Some(rgb) = palette.get(index as usize) else {
+                return Err(PngDecodeError::InvalidData(format!(
+                    "palette index out of range: {}",
+                    index
+                )));
+            };
+            let alpha = alpha
+                .and_then(|table| table.get(index as usize))
+                .copied()
+                .unwrap_or(255);
+            rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], alpha]);
+        }
+    }
+    Ok(())
+}
+
+fn unpack_samples(bytes: &[u8], width: usize, bit_depth: u8) -> impl Iterator<Item = u8> + '_ {
+    let mask = (1u16 << bit_depth) - 1;
+    (0..width).map(move |pixel| {
+        let bit_offset = pixel * usize::from(bit_depth);
+        let byte = bytes[bit_offset / 8];
+        let shift = 8 - usize::from(bit_depth) - (bit_offset % 8);
+        ((u16::from(byte) >> shift) & mask) as u8
+    })
+}
+
+fn scale_sample_to_u8(sample: u16, bit_depth: u8) -> u8 {
+    if bit_depth == 8 {
+        sample as u8
+    } else {
+        ((u32::from(sample) * 255) / ((1u32 << bit_depth) - 1)) as u8
+    }
 }
 
 fn paeth_predictor(a: u8, b: u8, c: u8) -> u8 {

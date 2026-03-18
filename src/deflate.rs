@@ -303,7 +303,7 @@ fn fixed_literal_decoder() -> Result<HuffmanDecoder> {
 }
 
 fn fixed_distance_decoder() -> Result<HuffmanDecoder> {
-    HuffmanDecoder::from_code_lengths(&vec![5u8; 30], Some(7), None)
+    HuffmanDecoder::from_code_lengths(&[5u8; 30], Some(7), None)
 }
 
 fn reverse_bits(bits: u16, width: u8) -> u16 {
