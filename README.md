@@ -24,43 +24,42 @@ Supported Decoding
 - `PLTE` and `tRNS`
 
 Decoded images are returned as RGBA8 via `PngImage`.
+If the source PNG is 16-bit, samples are downconverted to 8-bit when stored in `PngImage`.
 
 Supported Encoding
 ------------------
 
 - Source image type: `PngImage` (`RGBA8`)
-- `write_to()`:
-  - chooses a PNG representation automatically
-  - may emit grayscale, grayscale+alpha, rgb, rgba, or indexed-color PNG
-- `write_to_with_options()`:
-  - can force `grayscale`, `grayscale+alpha`, `rgb`, `rgba`, or `indexed-color`
-  - can enable Adam7 interlacing
+- `PngImage` stores a concrete `PngEncoding`
+- `write_to()` uses `image.encoding()` as-is
+- `PngEncoding::infer_from_rgba()` provides the same automatic selection used by `PngImage::new()`
 - Bit depth selection:
   - grayscale: `1/2/4/8-bit` when exactly representable
   - indexed-color: `1/2/4/8-bit`
   - other color types: `8-bit`
+- `PngBitDepth::Sixteen` may appear after decoding a 16-bit PNG, but `PngImage::write_to()` still writes an 8-bit PNG because `PngImage` stores RGBA8 pixels
 
 Example
 -------
 
 ```rust
-use nopng::{PngColorMode, PngEncodeOptions, PngImage};
+use nopng::{PngBitDepth, PngColorMode, PngEncoding, PngImage};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bytes = std::fs::read("image.png")?;
-    let image = PngImage::from_bytes(&bytes)?;
+    let mut image = PngImage::from_bytes(&bytes)?;
 
     println!("{}x{}", image.width(), image.height());
     println!("rgba bytes: {}", image.data().len());
+    println!("source encoding: {:?}", image.encoding());
 
+    *image.encoding_mut() = PngEncoding {
+        color_mode: PngColorMode::Indexed,
+        bit_depth: PngBitDepth::Four,
+        interlaced: true,
+    };
     let mut encoded = Vec::new();
-    image.write_to_with_options(
-        &mut encoded,
-        PngEncodeOptions {
-            color_mode: PngColorMode::Indexed,
-            interlaced: true,
-        },
-    )?;
+    image.write_to(&mut encoded)?;
     Ok(())
 }
 ```
@@ -69,4 +68,3 @@ TODO
 ----
 
 - Animated PNG
-- Encoding with compression

@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use nopng::{PngColorMode, PngEncodeOptions, PngImage};
+use nopng::{PngBitDepth, PngColorMode, PngEncoding, PngImage};
 use proptest::prelude::*;
 
 fn decode_with_png_crate(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), png::DecodingError> {
@@ -114,12 +114,14 @@ proptest! {
 
     #[test]
     fn encoded_png_matches_png_crate_for_grayscale((width, height, rgba) in grayscale_levels_strategy(), interlaced in any::<bool>()) {
-        let image = PngImage::new(width, height, rgba.clone()).unwrap();
-        let mut encoded = Vec::new();
-        image.write_to_with_options(&mut encoded, PngEncodeOptions {
+        let mut image = PngImage::new(width, height, rgba.clone()).unwrap();
+        *image.encoding_mut() = PngEncoding {
             color_mode: PngColorMode::Grayscale,
+            bit_depth: PngBitDepth::Two,
             interlaced,
-        }).unwrap();
+        };
+        let mut encoded = Vec::new();
+        image.write_to(&mut encoded).unwrap();
 
         let (decoded_width, decoded_height, decoded_rgba) = decode_with_png_crate(&encoded).unwrap();
         prop_assert_eq!(decoded_width, width);
@@ -129,12 +131,14 @@ proptest! {
 
     #[test]
     fn encoded_png_matches_png_crate_for_indexed((width, height, rgba) in indexed_image_strategy(), interlaced in any::<bool>()) {
-        let image = PngImage::new(width, height, rgba.clone()).unwrap();
-        let mut encoded = Vec::new();
-        image.write_to_with_options(&mut encoded, PngEncodeOptions {
+        let mut image = PngImage::new(width, height, rgba.clone()).unwrap();
+        *image.encoding_mut() = PngEncoding {
             color_mode: PngColorMode::Indexed,
+            bit_depth: PngBitDepth::Four,
             interlaced,
-        }).unwrap();
+        };
+        let mut encoded = Vec::new();
+        image.write_to(&mut encoded).unwrap();
 
         let (decoded_width, decoded_height, decoded_rgba) = decode_with_png_crate(&encoded).unwrap();
         prop_assert_eq!(decoded_width, width);

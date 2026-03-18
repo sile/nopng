@@ -91,8 +91,46 @@ impl From<std::io::Error> for PngEncodeError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PngBitDepth {
+    One,
+    Two,
+    Four,
+    Eight,
+    Sixteen,
+}
+
+impl PngBitDepth {
+    fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            1 => Some(Self::One),
+            2 => Some(Self::Two),
+            4 => Some(Self::Four),
+            8 => Some(Self::Eight),
+            16 => Some(Self::Sixteen),
+            _ => None,
+        }
+    }
+
+    fn as_u8(self) -> u8 {
+        match self {
+            Self::One => 1,
+            Self::Two => 2,
+            Self::Four => 4,
+            Self::Eight => 8,
+            Self::Sixteen => 16,
+        }
+    }
+
+    fn effective_for_rgba8(self) -> Self {
+        match self {
+            Self::Sixteen => Self::Eight,
+            other => other,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PngColorMode {
-    Auto,
     Grayscale,
     GrayscaleAlpha,
     Rgb,
@@ -101,16 +139,50 @@ pub enum PngColorMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PngEncodeOptions {
+pub struct PngEncoding {
     pub color_mode: PngColorMode,
+    pub bit_depth: PngBitDepth,
     pub interlaced: bool,
 }
 
-impl Default for PngEncodeOptions {
+impl Default for PngEncoding {
     fn default() -> Self {
         Self {
-            color_mode: PngColorMode::Auto,
+            color_mode: PngColorMode::Rgba,
+            bit_depth: PngBitDepth::Eight,
             interlaced: false,
+        }
+    }
+}
+
+impl PngEncoding {
+    /// Infers a concrete PNG encoding from RGBA8 bytes.
+    ///
+    /// Returns `None` when `rgba` is not a whole number of pixels.
+    pub fn infer_from_rgba(rgba: &[u8]) -> Option<Self> {
+        if !rgba.len().is_multiple_of(4) {
+            return None;
+        }
+        if rgba.is_empty() {
+            return Some(Self::default());
+        }
+        let pixels = rgba
+            .chunks_exact(4)
+            .map(|chunk| [chunk[0], chunk[1], chunk[2], chunk[3]])
+            .collect::<Vec<_>>();
+        Some(infer_encoding_from_pixels(&pixels))
+    }
+
+    fn from_decoded_image(header: &PngHeader, ancillary: &AncillaryChunks) -> Self {
+        let color_mode = match (header.color_type, ancillary.transparency.as_ref()) {
+            (0, Some(Transparency::Grayscale(_))) => PngColorMode::GrayscaleAlpha,
+            (2, Some(Transparency::Truecolor(_))) => PngColorMode::Rgba,
+            _ => color_mode_from_color_type(header.color_type),
+        };
+        Self {
+            color_mode,
+            bit_depth: PngBitDepth::from_u8(header.bit_depth).expect("validated bit depth"),
+            interlaced: header.interlace_method == 1,
         }
     }
 }
@@ -145,15 +217,42 @@ impl From<std::io::Error> for PngDecodeError {
     }
 }
 
+/// PNG image data stored as RGBA8 pixels.
+///
+/// Decoding a 16-bit PNG downconverts samples to 8-bit before storing them here.
+/// Encoding uses the attached [`PngEncoding`]. When `encoding.bit_depth` is
+/// [`PngBitDepth::Sixteen`], `write_to` writes an 8-bit PNG because this type
+/// only stores RGBA8 data.
 #[derive(Debug, Clone)]
 pub struct PngImage {
     width: u32,
     height: u32,
     data: Vec<u8>,
+    encoding: PngEncoding,
 }
 
 impl PngImage {
+    /// Creates a PNG image from RGBA8 pixel bytes and infers a concrete encoding.
     pub fn new(width: u32, height: u32, data: Vec<u8>) -> Option<Self> {
+        if (width * height * 4) as usize != data.len() {
+            None
+        } else {
+            let encoding = PngEncoding::infer_from_rgba(&data)?;
+            Some(Self {
+                width,
+                height,
+                data,
+                encoding,
+            })
+        }
+    }
+
+    pub fn new_with_encoding(
+        width: u32,
+        height: u32,
+        data: Vec<u8>,
+        encoding: PngEncoding,
+    ) -> Option<Self> {
         if (width * height * 4) as usize != data.len() {
             None
         } else {
@@ -161,16 +260,25 @@ impl PngImage {
                 width,
                 height,
                 data,
+                encoding,
             })
         }
     }
 
+    /// Reads a PNG image and stores its pixels as RGBA8.
+    ///
+    /// Source PNG color mode, bit depth, and interlace settings are restored into
+    /// [`PngImage::encoding`]. 16-bit input is still stored as RGBA8.
     pub fn read_from<R: Read>(reader: &mut R) -> Result<Self, PngDecodeError> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes)?;
         Self::from_bytes(&bytes)
     }
 
+    /// Decodes a PNG image into RGBA8 pixels.
+    ///
+    /// 16-bit input is downconverted to 8-bit pixel data. The original PNG
+    /// representation is summarized in [`PngImage::encoding`].
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, PngDecodeError> {
         if bytes.len() < PNG_SIGNATURE.len() || bytes[..PNG_SIGNATURE.len()] != PNG_SIGNATURE {
             return Err(PngDecodeError::InvalidSignature);
@@ -266,7 +374,8 @@ impl PngImage {
 
         let filtered = decompress_zlib(&idat_data)?;
         let rgba = decode_to_rgba(&header, &filtered, &ancillary)?;
-        Self::new(header.width, header.height, rgba)
+        let encoding = PngEncoding::from_decoded_image(&header, &ancillary);
+        Self::new_with_encoding(header.width, header.height, rgba, encoding)
             .ok_or_else(|| PngDecodeError::InvalidData("decoded image size mismatch".into()))
     }
 
@@ -282,17 +391,24 @@ impl PngImage {
         &self.data
     }
 
-    pub fn write_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        self.write_to_with_options(writer, PngEncodeOptions::default())
-            .map_err(encode_error_into_io)
+    pub fn encoding(&self) -> &PngEncoding {
+        &self.encoding
     }
 
-    pub fn write_to_with_options<W: Write>(
-        &self,
-        writer: &mut W,
-        options: PngEncodeOptions,
-    ) -> Result<(), PngEncodeError> {
-        let encoded = EncodedImage::from_rgba(self.width, self.height, &self.data, options)?;
+    pub fn encoding_mut(&mut self) -> &mut PngEncoding {
+        &mut self.encoding
+    }
+
+    /// Encodes the image using its current [`PngEncoding`].
+    ///
+    /// If `self.encoding.bit_depth` is [`PngBitDepth::Sixteen`], this method
+    /// writes an 8-bit PNG because `PngImage` stores RGBA8 pixels.
+    pub fn write_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        self.encode_to(writer).map_err(encode_error_into_io)
+    }
+
+    fn encode_to<W: Write>(&self, writer: &mut W) -> Result<(), PngEncodeError> {
+        let encoded = EncodedImage::from_rgba(self.width, self.height, &self.data, self.encoding)?;
         writer.write_all(&PNG_SIGNATURE)?;
 
         IhdrChunk {
@@ -912,15 +1028,15 @@ impl EncodedImage {
         width: u32,
         height: u32,
         rgba: &[u8],
-        options: PngEncodeOptions,
+        encoding: PngEncoding,
     ) -> Result<Self, PngEncodeError> {
         let pixels = rgba
             .chunks_exact(4)
             .map(|chunk| [chunk[0], chunk[1], chunk[2], chunk[3]])
             .collect::<Vec<_>>();
-        let target = EncodingTarget::analyze(&pixels, options.color_mode)?;
-        let interlace_method = u8::from(options.interlaced);
-        let filtered_data = if options.interlaced {
+        let target = EncodingTarget::analyze(&pixels, encoding)?;
+        let interlace_method = u8::from(encoding.interlaced);
+        let filtered_data = if encoding.interlaced {
             build_adam7_filtered_data(width, height, &pixels, &target)?
         } else {
             build_filtered_data(width, height, &pixels, &target)?
@@ -956,50 +1072,22 @@ enum EncodedPixelKind {
 }
 
 impl EncodingTarget {
-    fn analyze(pixels: &[[u8; 4]], mode: PngColorMode) -> Result<Self, PngEncodeError> {
-        let opaque = pixels.iter().all(|pixel| pixel[3] == 255);
-        let grayscale = pixels
-            .iter()
-            .all(|pixel| pixel[0] == pixel[1] && pixel[1] == pixel[2]);
-        let gray_level_count = pixels
-            .iter()
-            .map(|pixel| pixel[0])
-            .collect::<std::collections::BTreeSet<_>>()
-            .len();
-
-        let indexed = analyze_palette(pixels);
-
-        let mode = match mode {
-            PngColorMode::Auto => {
-                if grayscale && opaque {
-                    PngColorMode::Grayscale
-                } else if grayscale {
-                    PngColorMode::GrayscaleAlpha
-                } else if opaque {
-                    PngColorMode::Rgb
-                } else if indexed.is_some() {
-                    PngColorMode::Indexed
-                } else {
-                    PngColorMode::Rgba
-                }
-            }
-            other => other,
-        };
-
-        match mode {
+    fn analyze(pixels: &[[u8; 4]], encoding: PngEncoding) -> Result<Self, PngEncodeError> {
+        let effective_bit_depth = encoding.bit_depth.effective_for_rgba8();
+        match encoding.color_mode {
             PngColorMode::Grayscale => {
-                if !grayscale || !opaque {
+                if !pixels_are_opaque_grayscale(pixels) {
                     return Err(PngEncodeError::Unsupported(
                         "grayscale encoding requires opaque grayscale pixels".into(),
                     ));
                 }
-                let bit_depth = grayscale_bit_depth(pixels, gray_level_count);
+                validate_grayscale_bit_depth(pixels, effective_bit_depth)?;
                 Ok(Self {
-                    bit_depth,
+                    bit_depth: effective_bit_depth.as_u8(),
                     color_type: IhdrChunk::COLOR_TYPE_GRAYSCALE,
                     palette: None,
                     trns: None,
-                    pixel_kind: if bit_depth < 8 {
+                    pixel_kind: if effective_bit_depth.as_u8() < 8 {
                         EncodedPixelKind::GrayscalePacked
                     } else {
                         EncodedPixelKind::Grayscale8
@@ -1007,11 +1095,16 @@ impl EncodingTarget {
                 })
             }
             PngColorMode::GrayscaleAlpha => {
-                if !grayscale {
+                if !pixels_are_grayscale(pixels) {
                     return Err(PngEncodeError::Unsupported(
                         "grayscale+alpha encoding requires grayscale pixels".into(),
                     ));
                 }
+                validate_exact_bit_depth(
+                    PngColorMode::GrayscaleAlpha,
+                    effective_bit_depth,
+                    &[PngBitDepth::Eight],
+                )?;
                 Ok(Self {
                     bit_depth: 8,
                     color_type: IhdrChunk::COLOR_TYPE_GRAYSCALE_ALPHA,
@@ -1021,11 +1114,16 @@ impl EncodingTarget {
                 })
             }
             PngColorMode::Rgb => {
-                if !opaque {
+                if !pixels_are_opaque(pixels) {
                     return Err(PngEncodeError::Unsupported(
                         "rgb encoding requires opaque pixels".into(),
                     ));
                 }
+                validate_exact_bit_depth(
+                    PngColorMode::Rgb,
+                    effective_bit_depth,
+                    &[PngBitDepth::Eight],
+                )?;
                 Ok(Self {
                     bit_depth: 8,
                     color_type: IhdrChunk::COLOR_TYPE_RGB,
@@ -1034,29 +1132,35 @@ impl EncodingTarget {
                     pixel_kind: EncodedPixelKind::Rgb8,
                 })
             }
-            PngColorMode::Rgba => Ok(Self {
-                bit_depth: 8,
-                color_type: IhdrChunk::COLOR_TYPE_RGBA,
-                palette: None,
-                trns: None,
-                pixel_kind: EncodedPixelKind::Rgba8,
-            }),
+            PngColorMode::Rgba => {
+                validate_exact_bit_depth(
+                    PngColorMode::Rgba,
+                    effective_bit_depth,
+                    &[PngBitDepth::Eight],
+                )?;
+                Ok(Self {
+                    bit_depth: 8,
+                    color_type: IhdrChunk::COLOR_TYPE_RGBA,
+                    palette: None,
+                    trns: None,
+                    pixel_kind: EncodedPixelKind::Rgba8,
+                })
+            }
             PngColorMode::Indexed => {
-                let Some(indexed) = indexed else {
+                let Some(indexed) = analyze_palette(pixels) else {
                     return Err(PngEncodeError::Unsupported(
                         "indexed encoding requires at most 256 distinct colors".into(),
                     ));
                 };
-                let bit_depth = indexed_bit_depth(indexed.palette.len());
+                validate_indexed_bit_depth(indexed.palette.len(), effective_bit_depth)?;
                 Ok(Self {
-                    bit_depth,
+                    bit_depth: effective_bit_depth.as_u8(),
                     color_type: IhdrChunk::COLOR_TYPE_INDEXED,
                     palette: Some(indexed.palette),
                     trns: indexed.trns,
                     pixel_kind: EncodedPixelKind::Indexed,
                 })
             }
-            PngColorMode::Auto => unreachable!(),
         }
     }
 }
@@ -1065,6 +1169,138 @@ impl EncodingTarget {
 struct IndexedAnalysis {
     palette: Vec<[u8; 3]>,
     trns: Option<Vec<u8>>,
+}
+
+fn color_mode_from_color_type(color_type: u8) -> PngColorMode {
+    match color_type {
+        0 => PngColorMode::Grayscale,
+        2 => PngColorMode::Rgb,
+        3 => PngColorMode::Indexed,
+        4 => PngColorMode::GrayscaleAlpha,
+        6 => PngColorMode::Rgba,
+        _ => unreachable!(),
+    }
+}
+
+fn infer_encoding_from_pixels(pixels: &[[u8; 4]]) -> PngEncoding {
+    let opaque = pixels_are_opaque(pixels);
+    let grayscale = pixels_are_grayscale(pixels);
+    let gray_level_count = pixels
+        .iter()
+        .map(|pixel| pixel[0])
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+
+    let (color_mode, bit_depth) = if grayscale && opaque {
+        (PngColorMode::Grayscale, grayscale_bit_depth(pixels, gray_level_count))
+    } else if grayscale {
+        (PngColorMode::GrayscaleAlpha, PngBitDepth::Eight)
+    } else if opaque {
+        (PngColorMode::Rgb, PngBitDepth::Eight)
+    } else if let Some(indexed) = analyze_palette(pixels) {
+        (PngColorMode::Indexed, indexed_bit_depth(indexed.palette.len()))
+    } else {
+        (PngColorMode::Rgba, PngBitDepth::Eight)
+    };
+
+    PngEncoding {
+        color_mode,
+        bit_depth,
+        interlaced: false,
+    }
+}
+
+fn pixels_are_opaque(pixels: &[[u8; 4]]) -> bool {
+    pixels.iter().all(|pixel| pixel[3] == 255)
+}
+
+fn pixels_are_grayscale(pixels: &[[u8; 4]]) -> bool {
+    pixels
+        .iter()
+        .all(|pixel| pixel[0] == pixel[1] && pixel[1] == pixel[2])
+}
+
+fn pixels_are_opaque_grayscale(pixels: &[[u8; 4]]) -> bool {
+    pixels_are_grayscale(pixels) && pixels_are_opaque(pixels)
+}
+
+fn validate_exact_bit_depth(
+    color_mode: PngColorMode,
+    bit_depth: PngBitDepth,
+    allowed: &[PngBitDepth],
+) -> Result<(), PngEncodeError> {
+    if allowed.contains(&bit_depth) {
+        Ok(())
+    } else {
+        Err(PngEncodeError::Unsupported(format!(
+            "{color_mode:?} encoding does not support {}-bit output",
+            bit_depth.as_u8()
+        )))
+    }
+}
+
+fn validate_grayscale_bit_depth(
+    pixels: &[[u8; 4]],
+    bit_depth: PngBitDepth,
+) -> Result<(), PngEncodeError> {
+    validate_exact_bit_depth(
+        PngColorMode::Grayscale,
+        bit_depth,
+        &[
+            PngBitDepth::One,
+            PngBitDepth::Two,
+            PngBitDepth::Four,
+            PngBitDepth::Eight,
+        ],
+    )?;
+    if grayscale_pixels_fit_bit_depth(pixels, bit_depth) {
+        Ok(())
+    } else {
+        Err(PngEncodeError::Unsupported(format!(
+            "grayscale pixels are not exactly representable at {}-bit",
+            bit_depth.as_u8()
+        )))
+    }
+}
+
+fn grayscale_pixels_fit_bit_depth(pixels: &[[u8; 4]], bit_depth: PngBitDepth) -> bool {
+    match bit_depth {
+        PngBitDepth::One => pixels.iter().all(|pixel| matches!(pixel[0], 0 | 255)),
+        PngBitDepth::Two => pixels
+            .iter()
+            .all(|pixel| matches!(pixel[0], 0 | 85 | 170 | 255)),
+        PngBitDepth::Four => pixels.iter().all(|pixel| pixel[0] % 17 == 0),
+        PngBitDepth::Eight => true,
+        PngBitDepth::Sixteen => false,
+    }
+}
+
+fn validate_indexed_bit_depth(size: usize, bit_depth: PngBitDepth) -> Result<(), PngEncodeError> {
+    validate_exact_bit_depth(
+        PngColorMode::Indexed,
+        bit_depth,
+        &[
+            PngBitDepth::One,
+            PngBitDepth::Two,
+            PngBitDepth::Four,
+            PngBitDepth::Eight,
+        ],
+    )?;
+    let capacity = match bit_depth {
+        PngBitDepth::One => 2,
+        PngBitDepth::Two => 4,
+        PngBitDepth::Four => 16,
+        PngBitDepth::Eight => 256,
+        PngBitDepth::Sixteen => unreachable!(),
+    };
+    if size <= capacity {
+        Ok(())
+    } else {
+        Err(PngEncodeError::Unsupported(format!(
+            "indexed palette of size {size} does not fit in {}-bit output",
+            bit_depth.as_u8()
+        )))
+    }
 }
 
 fn analyze_palette(pixels: &[[u8; 4]]) -> Option<IndexedAnalysis> {
@@ -1095,28 +1331,28 @@ fn analyze_palette(pixels: &[[u8; 4]]) -> Option<IndexedAnalysis> {
     Some(IndexedAnalysis { palette, trns })
 }
 
-fn grayscale_bit_depth(pixels: &[[u8; 4]], gray_level_count: usize) -> u8 {
+fn grayscale_bit_depth(pixels: &[[u8; 4]], gray_level_count: usize) -> PngBitDepth {
     if pixels.iter().all(|pixel| matches!(pixel[0], 0 | 255)) {
-        1
+        PngBitDepth::One
     } else if pixels
         .iter()
         .all(|pixel| matches!(pixel[0], 0 | 85 | 170 | 255))
     {
-        2
+        PngBitDepth::Two
     } else if pixels.iter().all(|pixel| pixel[0] % 17 == 0) && gray_level_count <= 16 {
-        4
+        PngBitDepth::Four
     } else {
-        8
+        PngBitDepth::Eight
     }
 }
 
-fn indexed_bit_depth(size: usize) -> u8 {
+fn indexed_bit_depth(size: usize) -> PngBitDepth {
     match size {
         0 => unreachable!(),
-        1..=2 => 1,
-        3..=4 => 2,
-        5..=16 => 4,
-        _ => 8,
+        1..=2 => PngBitDepth::One,
+        3..=4 => PngBitDepth::Two,
+        5..=16 => PngBitDepth::Four,
+        _ => PngBitDepth::Eight,
     }
 }
 
@@ -1400,7 +1636,7 @@ impl<'a> Cursor<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{IhdrChunk, PngColorMode, PngEncodeOptions, PngImage};
+    use super::{IhdrChunk, PngBitDepth, PngColorMode, PngEncoding, PngImage};
 
     #[test]
     fn roundtrip_rgba_writer_and_reader() {
@@ -1424,6 +1660,14 @@ mod tests {
             ],
         )
         .unwrap();
+        assert_eq!(
+            image.encoding(),
+            &PngEncoding {
+                color_mode: PngColorMode::Grayscale,
+                bit_depth: PngBitDepth::Two,
+                interlaced: false,
+            }
+        );
         let mut bytes = Vec::new();
         image.write_to(&mut bytes).unwrap();
 
@@ -1437,8 +1681,8 @@ mod tests {
     }
 
     #[test]
-    fn write_to_with_options_can_force_indexed_and_trns() {
-        let image = PngImage::new(
+    fn write_to_uses_explicit_indexed_encoding() {
+        let mut image = PngImage::new(
             4,
             1,
             vec![
@@ -1446,16 +1690,13 @@ mod tests {
             ],
         )
         .unwrap();
+        *image.encoding_mut() = PngEncoding {
+            color_mode: PngColorMode::Indexed,
+            bit_depth: PngBitDepth::Two,
+            interlaced: false,
+        };
         let mut bytes = Vec::new();
-        image
-            .write_to_with_options(
-                &mut bytes,
-                PngEncodeOptions {
-                    color_mode: PngColorMode::Indexed,
-                    interlaced: false,
-                },
-            )
-            .unwrap();
+        image.write_to(&mut bytes).unwrap();
 
         let ihdr = read_ihdr(&bytes);
         assert_eq!(ihdr.bit_depth, 2);
@@ -1467,8 +1708,8 @@ mod tests {
     }
 
     #[test]
-    fn write_to_with_options_can_force_adam7() {
-        let image = PngImage::new(
+    fn write_to_uses_explicit_adam7_encoding() {
+        let mut image = PngImage::new(
             3,
             3,
             vec![
@@ -1477,22 +1718,49 @@ mod tests {
             ],
         )
         .unwrap();
+        *image.encoding_mut() = PngEncoding {
+            color_mode: PngColorMode::Rgb,
+            bit_depth: PngBitDepth::Eight,
+            interlaced: true,
+        };
         let mut bytes = Vec::new();
-        image
-            .write_to_with_options(
-                &mut bytes,
-                PngEncodeOptions {
-                    color_mode: PngColorMode::Rgb,
-                    interlaced: true,
-                },
-            )
-            .unwrap();
+        image.write_to(&mut bytes).unwrap();
 
         let ihdr = read_ihdr(&bytes);
         assert_eq!(ihdr.color_type, IhdrChunk::COLOR_TYPE_RGB);
         assert_eq!(ihdr.interlace_method, 1);
         let decoded = PngImage::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.data(), image.data());
+    }
+
+    #[test]
+    fn infer_from_rgba_returns_none_for_partial_pixel() {
+        assert_eq!(PngEncoding::infer_from_rgba(&[1, 2, 3]), None);
+    }
+
+    #[test]
+    fn decoding_preserves_source_encoding_summary() {
+        let image = PngImage::from_bytes(include_bytes!("../tests/data/gray16_interlaced.png")).unwrap();
+        assert_eq!(
+            image.encoding(),
+            &PngEncoding {
+                color_mode: PngColorMode::GrayscaleAlpha,
+                bit_depth: PngBitDepth::Sixteen,
+                interlaced: true,
+            }
+        );
+    }
+
+    #[test]
+    fn writing_with_sixteen_bit_encoding_writes_eight_bit_png() {
+        let image = PngImage::from_bytes(include_bytes!("../tests/data/gray16_interlaced.png")).unwrap();
+        let mut bytes = Vec::new();
+        image.write_to(&mut bytes).unwrap();
+
+        let ihdr = read_ihdr(&bytes);
+        assert_eq!(ihdr.bit_depth, 8);
+        assert_eq!(ihdr.color_type, IhdrChunk::COLOR_TYPE_GRAYSCALE_ALPHA);
+        assert_eq!(ihdr.interlace_method, 1);
     }
 
     struct IhdrInfo {
