@@ -98,4 +98,5 @@ fn encode_borrowed_rgb(data: &[u8]) -> nopng::Result<Vec<u8>> {
 TODO
 ----
 
+- Streaming / incremental API
 - Animated PNG

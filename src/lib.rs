@@ -7,6 +7,8 @@ mod chunk;
 mod crc;
 mod deflate;
 mod png;
+mod png_pixels;
+mod png_types;
 mod zlib;
 
 pub use png::Error;
