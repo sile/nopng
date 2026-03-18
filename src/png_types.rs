@@ -1,10 +1,10 @@
-use alloc::string::String;
+use alloc::borrow::Cow;
 use core::error::Error as CoreError;
 
 #[derive(Debug)]
 pub enum Error {
-    Unsupported(String),
-    InvalidData(String),
+    Unsupported(Cow<'static, str>),
+    InvalidData(Cow<'static, str>),
 }
 
 pub type Result<T> = core::result::Result<T, Error>;

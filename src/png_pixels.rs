@@ -276,7 +276,39 @@ impl<'a> PngPixels<'a> {
     }
 
     pub fn into_owned(self) -> PngPixels<'static> {
-        self.to_owned()
+        match self {
+            Self::Gray1(data) => PngPixels::Gray1(Cow::Owned(data.into_owned())),
+            Self::Gray2(data) => PngPixels::Gray2(Cow::Owned(data.into_owned())),
+            Self::Gray4(data) => PngPixels::Gray4(Cow::Owned(data.into_owned())),
+            Self::Gray8(data) => PngPixels::Gray8(Cow::Owned(data.into_owned())),
+            Self::Gray16(data) => PngPixels::Gray16(Cow::Owned(data.into_owned())),
+            Self::GrayAlpha8(data) => PngPixels::GrayAlpha8(Cow::Owned(data.into_owned())),
+            Self::GrayAlpha16(data) => PngPixels::GrayAlpha16(Cow::Owned(data.into_owned())),
+            Self::Rgb8(data) => PngPixels::Rgb8(Cow::Owned(data.into_owned())),
+            Self::Rgb16(data) => PngPixels::Rgb16(Cow::Owned(data.into_owned())),
+            Self::Rgba8(data) => PngPixels::Rgba8(Cow::Owned(data.into_owned())),
+            Self::Rgba16(data) => PngPixels::Rgba16(Cow::Owned(data.into_owned())),
+            Self::Indexed1 { indices, palette, trns } => PngPixels::Indexed1 {
+                indices: Cow::Owned(indices.into_owned()),
+                palette: Cow::Owned(palette.into_owned()),
+                trns: trns.map(|value| Cow::Owned(value.into_owned())),
+            },
+            Self::Indexed2 { indices, palette, trns } => PngPixels::Indexed2 {
+                indices: Cow::Owned(indices.into_owned()),
+                palette: Cow::Owned(palette.into_owned()),
+                trns: trns.map(|value| Cow::Owned(value.into_owned())),
+            },
+            Self::Indexed4 { indices, palette, trns } => PngPixels::Indexed4 {
+                indices: Cow::Owned(indices.into_owned()),
+                palette: Cow::Owned(palette.into_owned()),
+                trns: trns.map(|value| Cow::Owned(value.into_owned())),
+            },
+            Self::Indexed8 { indices, palette, trns } => PngPixels::Indexed8 {
+                indices: Cow::Owned(indices.into_owned()),
+                palette: Cow::Owned(palette.into_owned()),
+                trns: trns.map(|value| Cow::Owned(value.into_owned())),
+            },
+        }
     }
 
     pub fn to_gray8(&self) -> PngPixels<'static> {
@@ -510,7 +542,7 @@ fn validate_sample_range(samples: &[u8], bit_depth: u8, name: &str) -> Result<()
     } else {
         Err(Error::InvalidData(format!(
             "{name} contains a sample that does not fit in {bit_depth} bits"
-        )))
+        ).into()))
     }
 }
 
@@ -536,7 +568,7 @@ fn validate_indexed_pixels(indices: &[u8], palette: &[u8], trns: Option<&[u8]>, 
         return Err(Error::InvalidData(format!(
             "palette of size {} does not fit in {}-bit indexed pixels",
             palette_len, bit_depth
-        )));
+        ).into()));
     }
     if indices.iter().all(|&index| usize::from(index) < palette_len) {
         Ok(())

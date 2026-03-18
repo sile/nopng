@@ -66,10 +66,7 @@ impl TrnsChunk<'_> {
 pub struct IendChunk;
 
 impl IendChunk {
-    const SIZE: u32 = 0;
-
     pub fn append_to(&self, out: &mut Vec<u8>) {
-        let _ = Self::SIZE;
         append_chunk(out, b"IEND", &[]);
     }
 }
@@ -90,7 +87,7 @@ impl IdatChunk<'_> {
         let mut data = Vec::new();
         data.extend_from_slice(&ZlibHeader.bytes());
         let deflated = deflate::compress(self.filtered_data).map_err(|error| {
-            crate::png::Error::InvalidData(format!("invalid deflate stream: {error}"))
+            crate::png::Error::InvalidData(format!("invalid deflate stream: {error}").into())
         })?;
         data.extend_from_slice(&deflated);
         data.extend_from_slice(&adler32::calculate(self.filtered_data).to_be_bytes());
@@ -102,8 +99,5 @@ fn append_chunk(out: &mut Vec<u8>, chunk_type: &[u8; 4], data: &[u8]) {
     out.extend_from_slice(&(data.len() as u32).to_be_bytes());
     out.extend_from_slice(chunk_type);
     out.extend_from_slice(data);
-    let mut crc_input = Vec::with_capacity(4 + data.len());
-    crc_input.extend_from_slice(chunk_type);
-    crc_input.extend_from_slice(data);
-    out.extend_from_slice(&crc::calculate(&crc_input).to_be_bytes());
+    out.extend_from_slice(&crc::calculate(&[chunk_type.as_slice(), data]).to_be_bytes());
 }

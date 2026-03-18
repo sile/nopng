@@ -148,15 +148,15 @@ impl<'a> PngImage<'a> {
     /// a full decode.
     pub fn from_bytes(bytes: &[u8]) -> Result<PngImage<'static>> {
         let (header, ancillary, idat_data) = parse_png(bytes)?;
-        expected_filtered_len(&header)?;
+        let expected_filtered = expected_filtered_len(&header)?;
         expected_raw_len(&header)?;
         let filtered = decompress_zlib(&idat_data)?;
-        if filtered.len() != expected_filtered_len(&header)? {
+        if filtered.len() != expected_filtered {
             return Err(Error::InvalidData(format!(
                 "unexpected filtered data size: expected {}, got {}",
-                expected_filtered_len(&header)?,
+                expected_filtered,
                 filtered.len()
-            )));
+            ).into()));
         }
         let pixels = decode_to_pixels(&header, &filtered, &ancillary)?;
         let encoding = PngEncoding::for_pixels(&pixels);
@@ -274,19 +274,19 @@ impl PngHeader {
             return Err(Error::Unsupported(format!(
                 "unsupported compression method: {}",
                 self.compression_method
-            )));
+            ).into()));
         }
         if self.filter_method != 0 {
             return Err(Error::Unsupported(format!(
                 "unsupported filter method: {}",
                 self.filter_method
-            )));
+            ).into()));
         }
         if self.interlace_method > 1 {
             return Err(Error::Unsupported(format!(
                 "unsupported interlace method: {}",
                 self.interlace_method
-            )));
+            ).into()));
         }
         match (self.color_type, self.bit_depth) {
             (0, 1 | 2 | 4 | 8 | 16)
@@ -297,7 +297,7 @@ impl PngHeader {
             _ => Err(Error::Unsupported(format!(
                 "unsupported color type/bit depth combination: color_type={}, bit_depth={}",
                 self.color_type, self.bit_depth
-            ))),
+            ).into())),
         }
     }
 
@@ -376,9 +376,9 @@ impl AncillaryChunks {
         if header.color_type == 3 && self.palette.is_none() {
             return Err(Error::InvalidData("missing PLTE for palette image".into()));
         }
-        if header.color_type != 3 && self.palette.is_some() {
+        if matches!(header.color_type, 0 | 4) && self.palette.is_some() {
             return Err(Error::InvalidData(
-                "PLTE chunk is only supported for palette images".into(),
+                "PLTE chunk is not allowed for grayscale images".into(),
             ));
         }
         match (&self.transparency, header.color_type) {
@@ -396,7 +396,7 @@ impl AncillaryChunks {
                 return Err(Error::InvalidData(format!(
                     "tRNS is not allowed for color type {}",
                     header.color_type
-                )));
+                ).into()));
             }
             (None, _) => {}
         }
@@ -404,13 +404,7 @@ impl AncillaryChunks {
     }
 }
 
-fn parse_palette(chunk_data: &[u8], color_type: u8) -> Result<Vec<[u8; 3]>> {
-    if color_type != 3 {
-        return Err(Error::InvalidData(format!(
-            "PLTE is not allowed for color type {}",
-            color_type
-        )));
-    }
+fn parse_palette(chunk_data: &[u8]) -> Result<Vec<[u8; 3]>> {
     if chunk_data.is_empty() || !chunk_data.len().is_multiple_of(3) {
         return Err(Error::InvalidData(
             "PLTE length must be a non-zero multiple of 3".into(),
@@ -475,7 +469,7 @@ fn parse_transparency(
         _ => Err(Error::InvalidData(format!(
             "tRNS is not allowed for color type {}",
             header.color_type
-        ))),
+        ).into())),
     }
 }
 
@@ -497,15 +491,12 @@ fn parse_png(bytes: &[u8]) -> Result<(PngHeader, AncillaryChunks, Vec<u8>)> {
         let chunk_data = cursor.read_bytes(length)?;
         let expected_crc = cursor.read_u32()?;
 
-        let mut crc_input = Vec::with_capacity(4 + chunk_data.len());
-        crc_input.extend_from_slice(&chunk_type);
-        crc_input.extend_from_slice(chunk_data);
-        let actual_crc = crc::calculate(&crc_input);
+        let actual_crc = crc::calculate(&[&chunk_type[..], chunk_data]);
         if actual_crc != expected_crc {
             return Err(Error::InvalidData(format!(
                 "CRC mismatch for chunk {}",
                 core::str::from_utf8(&chunk_type).unwrap_or("????"),
-            )));
+            ).into()));
         }
 
         match &chunk_type {
@@ -525,7 +516,12 @@ fn parse_png(bytes: &[u8]) -> Result<(PngHeader, AncillaryChunks, Vec<u8>)> {
                 if seen_idat {
                     return Err(Error::InvalidData("PLTE appears after IDAT".into()));
                 }
-                ancillary.set_palette(parse_palette(chunk_data, header.color_type)?)?;
+                if matches!(header.color_type, 0 | 4) {
+                    return Err(Error::InvalidData(
+                        "PLTE chunk is not allowed for grayscale images".into(),
+                    ));
+                }
+                ancillary.set_palette(parse_palette(chunk_data)?)?;
             }
             b"tRNS" => {
                 let Some(header) = header else {
@@ -579,7 +575,7 @@ fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>> {
         return Err(Error::Unsupported(format!(
             "unsupported zlib compression method: {}",
             cmf & 0x0F
-        )));
+        ).into()));
     }
     if cmf >> 4 > 7 {
         return Err(Error::Unsupported("zlib window size is too large".into()));
@@ -592,7 +588,7 @@ fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>> {
 
     let deflate_bytes = &data[2..data.len() - 4];
     let decoded = deflate::decompress(deflate_bytes)
-        .map_err(|error| Error::InvalidData(format!("invalid deflate stream: {error}")))?;
+        .map_err(|error| Error::InvalidData(format!("invalid deflate stream: {error}").into()))?;
     let expected_adler = u32::from_be_bytes(
         data[data.len() - 4..]
             .try_into()
@@ -876,7 +872,7 @@ fn unfilter_scanlines(
             "unexpected filtered data size: expected {}, got {}",
             expected_len,
             filtered.len()
-        )));
+        ).into()));
     }
 
     let bpp = header.filter_bpp();
@@ -929,7 +925,7 @@ fn unfilter_scanlines(
                 return Err(Error::InvalidData(format!(
                     "unsupported PNG filter type: {}",
                     filter
-                )));
+                ).into()));
             }
         }
     }
@@ -1525,7 +1521,7 @@ fn validate_exact_bit_depth(
         Err(Error::Unsupported(format!(
             "{color_mode:?} encoding does not support {}-bit output",
             bit_depth.as_u8()
-        )))
+        ).into()))
     }
 }
 
@@ -1546,7 +1542,7 @@ fn validate_grayscale_bit_depth(pixels: &[[u8; 4]], bit_depth: PngBitDepth) -> R
         Err(Error::Unsupported(format!(
             "grayscale pixels are not exactly representable at {}-bit",
             bit_depth.as_u8()
-        )))
+        ).into()))
     }
 }
 
@@ -1586,7 +1582,7 @@ fn validate_indexed_bit_depth(size: usize, bit_depth: PngBitDepth) -> Result<()>
         Err(Error::Unsupported(format!(
             "indexed palette of size {size} does not fit in {}-bit output",
             bit_depth.as_u8()
-        )))
+        ).into()))
     }
 }
 
@@ -1994,7 +1990,7 @@ fn finish_adam7_offset(filtered: &[u8], offset: usize) -> Result<()> {
             "unexpected Adam7 data size: consumed {}, got {}",
             offset,
             filtered.len()
-        )))
+        ).into()))
     } else {
         Ok(())
     }

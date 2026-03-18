@@ -28,10 +28,12 @@ fn update_crc(crc: u32, byte: u8) -> u32 {
     (crc >> 8) ^ CRC_TABLE[((crc & 0xFF) ^ byte as u32) as usize]
 }
 
-pub fn calculate(bytes: &[u8]) -> u32 {
+pub fn calculate(slices: &[&[u8]]) -> u32 {
     let mut crc = CRC_INITIAL;
-    for &byte in bytes {
-        crc = update_crc(crc, byte);
+    for &slice in slices {
+        for &byte in slice {
+            crc = update_crc(crc, byte);
+        }
     }
     crc ^ CRC_INITIAL
 }
