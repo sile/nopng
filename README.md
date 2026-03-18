@@ -31,13 +31,13 @@ Supported Encoding
 
 - Source image type: `PngImage` (`RGBA8`)
 - `PngImage` stores a concrete `PngEncoding`
-- `write_to()` uses `image.encoding()` as-is
+- `to_bytes()` uses `image.encoding()` as-is
 - `PngEncoding::infer_from_rgba()` provides the same automatic selection used by `PngImage::new()`
 - Bit depth selection:
   - grayscale: `1/2/4/8-bit` when exactly representable
   - indexed-color: `1/2/4/8-bit`
   - other color types: `8-bit`
-- `PngBitDepth::Sixteen` may appear after decoding a 16-bit PNG, but `PngImage::write_to()` still writes an 8-bit PNG because `PngImage` stores RGBA8 pixels
+- `PngBitDepth::Sixteen` may appear after decoding a 16-bit PNG, but `PngImage::to_bytes()` still writes an 8-bit PNG because `PngImage` stores RGBA8 pixels
 
 Example
 -------
@@ -58,8 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         bit_depth: PngBitDepth::Four,
         interlaced: true,
     };
-    let mut encoded = Vec::new();
-    image.write_to(&mut encoded)?;
+    let encoded = image.to_bytes()?;
     Ok(())
 }
 ```

@@ -1,6 +1,8 @@
+use std::io::Write;
+
 use nopng::PngImage;
 
-fn main() -> std::io::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a 32x32 RGBA image (4 bytes per pixel)
     let width = 32;
     let height = 32;
@@ -19,9 +21,10 @@ fn main() -> std::io::Result<()> {
     let png_image = PngImage::new(width, height, data).expect("infallible");
 
     // Write the PNG to stdout
+    let bytes = png_image.to_bytes()?;
     let stdout = std::io::stdout();
     let mut stdout = stdout.lock();
-    png_image.write_to(&mut stdout)?;
+    stdout.write_all(&bytes)?;
 
     Ok(())
 }

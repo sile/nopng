@@ -1,5 +1,3 @@
-use std::io::{Read, Write};
-
 use crate::chunk::{IdatChunk, IendChunk, IhdrChunk, PlteChunk, TrnsChunk};
 use crate::{adler32, crc, deflate};
 
@@ -51,7 +49,6 @@ const ADAM7_PASSES: [Adam7Pass; 7] = [
 
 #[derive(Debug)]
 pub enum PngDecodeError {
-    Io(std::io::Error),
     InvalidSignature,
     InvalidChunk(String),
     Unsupported(String),
@@ -60,7 +57,6 @@ pub enum PngDecodeError {
 
 #[derive(Debug)]
 pub enum PngEncodeError {
-    Io(std::io::Error),
     Unsupported(String),
     InvalidData(String),
 }
@@ -68,7 +64,6 @@ pub enum PngEncodeError {
 impl std::fmt::Display for PngEncodeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Io(error) => error.fmt(f),
             Self::Unsupported(message) => f.write_str(message),
             Self::InvalidData(message) => f.write_str(message),
         }
@@ -78,15 +73,8 @@ impl std::fmt::Display for PngEncodeError {
 impl std::error::Error for PngEncodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Io(error) => Some(error),
             Self::Unsupported(_) | Self::InvalidData(_) => None,
         }
-    }
-}
-
-impl From<std::io::Error> for PngEncodeError {
-    fn from(error: std::io::Error) -> Self {
-        Self::Io(error)
     }
 }
 
@@ -190,7 +178,6 @@ impl PngEncoding {
 impl std::fmt::Display for PngDecodeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Io(error) => error.fmt(f),
             Self::InvalidSignature => f.write_str("invalid PNG signature"),
             Self::InvalidChunk(message) => f.write_str(message),
             Self::Unsupported(message) => f.write_str(message),
@@ -202,18 +189,11 @@ impl std::fmt::Display for PngDecodeError {
 impl std::error::Error for PngDecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Io(error) => Some(error),
             Self::InvalidSignature
             | Self::InvalidChunk(_)
             | Self::Unsupported(_)
             | Self::InvalidData(_) => None,
         }
-    }
-}
-
-impl From<std::io::Error> for PngDecodeError {
-    fn from(error: std::io::Error) -> Self {
-        Self::Io(error)
     }
 }
 
@@ -265,20 +245,11 @@ impl PngImage {
         }
     }
 
-    /// Reads a PNG image and stores its pixels as RGBA8.
+    /// Decodes PNG bytes into RGBA8 pixels.
     ///
-    /// Source PNG color mode, bit depth, and interlace settings are restored into
-    /// [`PngImage::encoding`]. 16-bit input is still stored as RGBA8.
-    pub fn read_from<R: Read>(reader: &mut R) -> Result<Self, PngDecodeError> {
-        let mut bytes = Vec::new();
-        reader.read_to_end(&mut bytes)?;
-        Self::from_bytes(&bytes)
-    }
-
-    /// Decodes a PNG image into RGBA8 pixels.
-    ///
-    /// 16-bit input is downconverted to 8-bit pixel data. The original PNG
-    /// representation is summarized in [`PngImage::encoding`].
+    /// This is the public decode entry point. 16-bit input is downconverted to
+    /// 8-bit pixel data. The original PNG representation is summarized in
+    /// [`PngImage::encoding`].
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, PngDecodeError> {
         if bytes.len() < PNG_SIGNATURE.len() || bytes[..PNG_SIGNATURE.len()] != PNG_SIGNATURE {
             return Err(PngDecodeError::InvalidSignature);
@@ -403,13 +374,10 @@ impl PngImage {
     ///
     /// If `self.encoding.bit_depth` is [`PngBitDepth::Sixteen`], this method
     /// writes an 8-bit PNG because `PngImage` stores RGBA8 pixels.
-    pub fn write_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        self.encode_to(writer).map_err(encode_error_into_io)
-    }
-
-    fn encode_to<W: Write>(&self, writer: &mut W) -> Result<(), PngEncodeError> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>, PngEncodeError> {
         let encoded = EncodedImage::from_rgba(self.width, self.height, &self.data, self.encoding)?;
-        writer.write_all(&PNG_SIGNATURE)?;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&PNG_SIGNATURE);
 
         IhdrChunk {
             width: self.width,
@@ -418,20 +386,20 @@ impl PngImage {
             color_type: encoded.color_type,
             interlace_method: encoded.interlace_method,
         }
-        .write_to(writer)?;
+        .append_to(&mut bytes);
         if let Some(palette) = encoded.palette.as_deref() {
-            PlteChunk { palette }.write_to(writer)?;
+            PlteChunk { palette }.append_to(&mut bytes);
         }
         if let Some(trns) = encoded.trns.as_deref() {
-            TrnsChunk { data: trns }.write_to(writer)?;
+            TrnsChunk { data: trns }.append_to(&mut bytes);
         }
         IdatChunk {
             filtered_data: &encoded.filtered_data,
         }
-        .write_to(writer)?;
-        IendChunk.write_to(writer)?;
+        .append_to(&mut bytes)?;
+        IendChunk.append_to(&mut bytes);
 
-        Ok(())
+        Ok(bytes)
     }
 }
 
@@ -1002,15 +970,6 @@ fn scale_sample_to_u8(sample: u16, bit_depth: u8) -> u8 {
 
 fn downsample_u16(sample: u16) -> u8 {
     (sample >> 8) as u8
-}
-
-fn encode_error_into_io(error: PngEncodeError) -> std::io::Error {
-    match error {
-        PngEncodeError::Io(error) => error,
-        PngEncodeError::Unsupported(message) | PngEncodeError::InvalidData(message) => {
-            std::io::Error::new(std::io::ErrorKind::InvalidInput, message)
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -1641,8 +1600,7 @@ mod tests {
     #[test]
     fn roundtrip_rgba_writer_and_reader() {
         let image = PngImage::new(2, 1, vec![255, 0, 0, 255, 0, 255, 0, 128]).unwrap();
-        let mut bytes = Vec::new();
-        image.write_to(&mut bytes).unwrap();
+        let bytes = image.to_bytes().unwrap();
 
         let decoded = PngImage::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.width(), 2);
@@ -1668,8 +1626,7 @@ mod tests {
                 interlaced: false,
             }
         );
-        let mut bytes = Vec::new();
-        image.write_to(&mut bytes).unwrap();
+        let bytes = image.to_bytes().unwrap();
 
         let ihdr = read_ihdr(&bytes);
         assert_eq!(ihdr.bit_depth, 2);
@@ -1695,8 +1652,7 @@ mod tests {
             bit_depth: PngBitDepth::Two,
             interlaced: false,
         };
-        let mut bytes = Vec::new();
-        image.write_to(&mut bytes).unwrap();
+        let bytes = image.to_bytes().unwrap();
 
         let ihdr = read_ihdr(&bytes);
         assert_eq!(ihdr.bit_depth, 2);
@@ -1723,8 +1679,7 @@ mod tests {
             bit_depth: PngBitDepth::Eight,
             interlaced: true,
         };
-        let mut bytes = Vec::new();
-        image.write_to(&mut bytes).unwrap();
+        let bytes = image.to_bytes().unwrap();
 
         let ihdr = read_ihdr(&bytes);
         assert_eq!(ihdr.color_type, IhdrChunk::COLOR_TYPE_RGB);
@@ -1754,8 +1709,7 @@ mod tests {
     #[test]
     fn writing_with_sixteen_bit_encoding_writes_eight_bit_png() {
         let image = PngImage::from_bytes(include_bytes!("../tests/data/gray16_interlaced.png")).unwrap();
-        let mut bytes = Vec::new();
-        image.write_to(&mut bytes).unwrap();
+        let bytes = image.to_bytes().unwrap();
 
         let ihdr = read_ihdr(&bytes);
         assert_eq!(ihdr.bit_depth, 8);

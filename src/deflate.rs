@@ -1,6 +1,5 @@
 use std::cmp;
 use std::collections::BinaryHeap;
-use std::io::Write;
 
 const MAX_BITS: usize = 15;
 const END_OF_BLOCK: u16 = 256;
@@ -93,16 +92,8 @@ impl std::error::Error for Error {}
 
 type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Debug)]
-pub struct DeflateDynamicEncoder;
-
-impl DeflateDynamicEncoder {
-    pub fn encode<W: Write>(&mut self, writer: &mut W, data: &[u8]) -> std::io::Result<()> {
-        let encoded = encode_dynamic_literals(data)
-            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-        writer.write_all(&encoded)?;
-        writer.flush()
-    }
+pub fn compress(data: &[u8]) -> Result<Vec<u8>> {
+    encode_dynamic_literals(data)
 }
 
 pub fn decompress(input: &[u8]) -> Result<Vec<u8>> {

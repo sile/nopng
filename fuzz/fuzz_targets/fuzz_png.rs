@@ -9,8 +9,7 @@ fuzz_target!(|data: &[u8]| {
         let _ = image.height();
         let _ = image.data();
 
-        let mut encoded = Vec::new();
-        if image.write_to(&mut encoded).is_ok() {
+        if let Ok(encoded) = image.to_bytes() {
             let _ = PngImage::from_bytes(&encoded);
         }
     }

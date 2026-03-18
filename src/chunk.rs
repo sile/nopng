@@ -1,6 +1,4 @@
-use std::io::Write;
-
-use crate::{adler32, crc::CrcWriter, deflate::DeflateDynamicEncoder, zlib::ZlibHeader};
+use crate::{adler32, crc, deflate, zlib::ZlibHeader};
 
 #[derive(Debug, Clone)]
 pub struct IhdrChunk {
@@ -22,21 +20,16 @@ impl IhdrChunk {
     const COMPRESSION_METHOD_DEFLATE: u8 = 0;
     const FILTER_METHOD_ADAPTIVE: u8 = 0;
 
-    pub fn write_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        writer.write_all(&Self::SIZE.to_be_bytes())?;
-
-        let mut writer = CrcWriter::new(writer);
-        writer.write_all(b"IHDR")?;
-        writer.write_all(&self.width.to_be_bytes())?;
-        writer.write_all(&self.height.to_be_bytes())?;
-        writer.write_all(&[self.bit_depth])?;
-        writer.write_all(&[self.color_type])?;
-        writer.write_all(&[Self::COMPRESSION_METHOD_DEFLATE])?;
-        writer.write_all(&[Self::FILTER_METHOD_ADAPTIVE])?;
-        writer.write_all(&[self.interlace_method])?;
-        writer.finish()?;
-
-        Ok(())
+    pub fn append_to(&self, out: &mut Vec<u8>) {
+        let mut data = Vec::with_capacity(Self::SIZE as usize);
+        data.extend_from_slice(&self.width.to_be_bytes());
+        data.extend_from_slice(&self.height.to_be_bytes());
+        data.push(self.bit_depth);
+        data.push(self.color_type);
+        data.push(Self::COMPRESSION_METHOD_DEFLATE);
+        data.push(Self::FILTER_METHOD_ADAPTIVE);
+        data.push(self.interlace_method);
+        append_chunk(out, b"IHDR", &data);
     }
 }
 
@@ -46,17 +39,12 @@ pub struct PlteChunk<'a> {
 }
 
 impl PlteChunk<'_> {
-    pub fn write_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        let size = (self.palette.len() * 3) as u32;
-        writer.write_all(&size.to_be_bytes())?;
-
-        let mut writer = CrcWriter::new(writer);
-        writer.write_all(b"PLTE")?;
+    pub fn append_to(&self, out: &mut Vec<u8>) {
+        let mut data = Vec::with_capacity(self.palette.len() * 3);
         for rgb in self.palette {
-            writer.write_all(rgb)?;
+            data.extend_from_slice(rgb);
         }
-        writer.finish()?;
-        Ok(())
+        append_chunk(out, b"PLTE", &data);
     }
 }
 
@@ -66,14 +54,8 @@ pub struct TrnsChunk<'a> {
 }
 
 impl TrnsChunk<'_> {
-    pub fn write_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        writer.write_all(&(self.data.len() as u32).to_be_bytes())?;
-
-        let mut writer = CrcWriter::new(writer);
-        writer.write_all(b"tRNS")?;
-        writer.write_all(self.data)?;
-        writer.finish()?;
-        Ok(())
+    pub fn append_to(&self, out: &mut Vec<u8>) {
+        append_chunk(out, b"tRNS", self.data);
     }
 }
 
@@ -83,14 +65,9 @@ pub struct IendChunk;
 impl IendChunk {
     const SIZE: u32 = 0;
 
-    pub fn write_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        writer.write_all(&Self::SIZE.to_be_bytes())?;
-
-        let mut writer = CrcWriter::new(writer);
-        writer.write_all(b"IEND")?;
-        writer.finish()?;
-
-        Ok(())
+    pub fn append_to(&self, out: &mut Vec<u8>) {
+        let _ = Self::SIZE;
+        append_chunk(out, b"IEND", &[]);
     }
 }
 
@@ -100,25 +77,30 @@ pub struct IdatChunk<'a> {
 }
 
 impl IdatChunk<'_> {
-    pub fn write_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        let mut chunk_data = Vec::new();
-        self.write_chunk_data_to(&mut chunk_data)?;
-
-        writer.write_all(&(chunk_data.len() as u32).to_be_bytes())?;
-
-        let mut writer = CrcWriter::new(writer);
-        writer.write_all(b"IDAT")?;
-        writer.write_all(&chunk_data)?;
-        writer.finish()?;
-
+    pub fn append_to(&self, out: &mut Vec<u8>) -> Result<(), crate::png::PngEncodeError> {
+        let chunk_data = self.chunk_data()?;
+        append_chunk(out, b"IDAT", &chunk_data);
         Ok(())
     }
 
-    fn write_chunk_data_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        ZlibHeader.write_to(writer)?;
-        DeflateDynamicEncoder.encode(writer, self.filtered_data)?;
-        writer.write_all(&adler32::calculate(self.filtered_data).to_be_bytes())?;
-
-        Ok(())
+    fn chunk_data(&self) -> Result<Vec<u8>, crate::png::PngEncodeError> {
+        let mut data = Vec::new();
+        data.extend_from_slice(&ZlibHeader.bytes());
+        let deflated = deflate::compress(self.filtered_data).map_err(|error| {
+            crate::png::PngEncodeError::InvalidData(format!("invalid deflate stream: {error}"))
+        })?;
+        data.extend_from_slice(&deflated);
+        data.extend_from_slice(&adler32::calculate(self.filtered_data).to_be_bytes());
+        Ok(data)
     }
+}
+
+fn append_chunk(out: &mut Vec<u8>, chunk_type: &[u8; 4], data: &[u8]) {
+    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    out.extend_from_slice(chunk_type);
+    out.extend_from_slice(data);
+    let mut crc_input = Vec::with_capacity(4 + data.len());
+    crc_input.extend_from_slice(chunk_type);
+    crc_input.extend_from_slice(data);
+    out.extend_from_slice(&crc::calculate(&crc_input).to_be_bytes());
 }

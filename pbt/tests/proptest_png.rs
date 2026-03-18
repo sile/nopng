@@ -103,8 +103,7 @@ proptest! {
     #[test]
     fn roundtrip_random_rgba((width, height, rgba) in rgba_image_strategy(8, 8)) {
         let image = PngImage::new(width, height, rgba.clone()).unwrap();
-        let mut encoded = Vec::new();
-        image.write_to(&mut encoded).unwrap();
+        let encoded = image.to_bytes().unwrap();
 
         let decoded = PngImage::from_bytes(&encoded).unwrap();
         prop_assert_eq!(decoded.width(), width);
@@ -120,8 +119,7 @@ proptest! {
             bit_depth: PngBitDepth::Two,
             interlaced,
         };
-        let mut encoded = Vec::new();
-        image.write_to(&mut encoded).unwrap();
+        let encoded = image.to_bytes().unwrap();
 
         let (decoded_width, decoded_height, decoded_rgba) = decode_with_png_crate(&encoded).unwrap();
         prop_assert_eq!(decoded_width, width);
@@ -137,8 +135,7 @@ proptest! {
             bit_depth: PngBitDepth::Four,
             interlaced,
         };
-        let mut encoded = Vec::new();
-        image.write_to(&mut encoded).unwrap();
+        let encoded = image.to_bytes().unwrap();
 
         let (decoded_width, decoded_height, decoded_rgba) = decode_with_png_crate(&encoded).unwrap();
         prop_assert_eq!(decoded_width, width);

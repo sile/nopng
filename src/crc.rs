@@ -1,5 +1,3 @@
-use std::io::Write;
-
 const CRC_INITIAL: u32 = 0xFFFFFFFF;
 
 const CRC_TABLE: [u32; 256] = {
@@ -36,38 +34,4 @@ pub fn calculate(bytes: &[u8]) -> u32 {
         crc = update_crc(crc, byte);
     }
     crc ^ CRC_INITIAL
-}
-
-#[derive(Debug)]
-pub struct CrcWriter<W> {
-    inner: W,
-    crc: u32,
-}
-
-impl<W: Write> CrcWriter<W> {
-    pub fn new(inner: W) -> Self {
-        Self {
-            inner,
-            crc: CRC_INITIAL,
-        }
-    }
-
-    pub fn finish(mut self) -> std::io::Result<()> {
-        let final_crc = self.crc ^ CRC_INITIAL;
-        self.inner.write_all(&final_crc.to_be_bytes())
-    }
-}
-
-impl<W: Write> Write for CrcWriter<W> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let written_size = self.inner.write(buf)?;
-        for b in &buf[..written_size] {
-            self.crc = update_crc(self.crc, *b);
-        }
-        Ok(written_size)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.inner.flush()
-    }
 }
