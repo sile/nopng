@@ -11,7 +11,9 @@ use crate::png_pixels::{
 use crate::{adler32, crc, deflate};
 
 pub use crate::png_pixels::PngPixels;
-pub use crate::png_types::{Error, PngBitDepth, PngColorMode, PngEncoding, PngImage, PngInfo, Result};
+pub use crate::png_types::{
+    Error, PngBitDepth, PngColorMode, PngEncoding, PngImage, PngInfo, Result,
+};
 
 const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 const ADAM7_PASSES: [Adam7Pass; 7] = [
@@ -152,11 +154,14 @@ impl<'a> PngImage<'a> {
         expected_raw_len(&header)?;
         let filtered = decompress_zlib(&idat_data)?;
         if filtered.len() != expected_filtered {
-            return Err(Error::InvalidData(format!(
-                "unexpected filtered data size: expected {}, got {}",
-                expected_filtered,
-                filtered.len()
-            ).into()));
+            return Err(Error::InvalidData(
+                format!(
+                    "unexpected filtered data size: expected {}, got {}",
+                    expected_filtered,
+                    filtered.len()
+                )
+                .into(),
+            ));
         }
         let pixels = decode_to_pixels(&header, &filtered, &ancillary)?;
         let encoding = PngEncoding::for_pixels(&pixels);
@@ -271,22 +276,23 @@ impl PngHeader {
 
     fn validate(&self) -> Result<()> {
         if self.compression_method != 0 {
-            return Err(Error::Unsupported(format!(
-                "unsupported compression method: {}",
-                self.compression_method
-            ).into()));
+            return Err(Error::Unsupported(
+                format!(
+                    "unsupported compression method: {}",
+                    self.compression_method
+                )
+                .into(),
+            ));
         }
         if self.filter_method != 0 {
-            return Err(Error::Unsupported(format!(
-                "unsupported filter method: {}",
-                self.filter_method
-            ).into()));
+            return Err(Error::Unsupported(
+                format!("unsupported filter method: {}", self.filter_method).into(),
+            ));
         }
         if self.interlace_method > 1 {
-            return Err(Error::Unsupported(format!(
-                "unsupported interlace method: {}",
-                self.interlace_method
-            ).into()));
+            return Err(Error::Unsupported(
+                format!("unsupported interlace method: {}", self.interlace_method).into(),
+            ));
         }
         match (self.color_type, self.bit_depth) {
             (0, 1 | 2 | 4 | 8 | 16)
@@ -294,10 +300,13 @@ impl PngHeader {
             | (2, 8 | 16)
             | (4, 8 | 16)
             | (6, 8 | 16) => Ok(()),
-            _ => Err(Error::Unsupported(format!(
-                "unsupported color type/bit depth combination: color_type={}, bit_depth={}",
-                self.color_type, self.bit_depth
-            ).into())),
+            _ => Err(Error::Unsupported(
+                format!(
+                    "unsupported color type/bit depth combination: color_type={}, bit_depth={}",
+                    self.color_type, self.bit_depth
+                )
+                .into(),
+            )),
         }
     }
 
@@ -393,10 +402,9 @@ impl AncillaryChunks {
                 }
             }
             (Some(_), _) => {
-                return Err(Error::InvalidData(format!(
-                    "tRNS is not allowed for color type {}",
-                    header.color_type
-                ).into()));
+                return Err(Error::InvalidData(
+                    format!("tRNS is not allowed for color type {}", header.color_type).into(),
+                ));
             }
             (None, _) => {}
         }
@@ -466,10 +474,9 @@ fn parse_transparency(
             }
             Ok(Transparency::Palette(chunk_data.to_vec()))
         }
-        _ => Err(Error::InvalidData(format!(
-            "tRNS is not allowed for color type {}",
-            header.color_type
-        ).into())),
+        _ => Err(Error::InvalidData(
+            format!("tRNS is not allowed for color type {}", header.color_type).into(),
+        )),
     }
 }
 
@@ -493,10 +500,13 @@ fn parse_png(bytes: &[u8]) -> Result<(PngHeader, AncillaryChunks, Vec<u8>)> {
 
         let actual_crc = crc::calculate(&[&chunk_type[..], chunk_data]);
         if actual_crc != expected_crc {
-            return Err(Error::InvalidData(format!(
-                "CRC mismatch for chunk {}",
-                core::str::from_utf8(&chunk_type).unwrap_or("????"),
-            ).into()));
+            return Err(Error::InvalidData(
+                format!(
+                    "CRC mismatch for chunk {}",
+                    core::str::from_utf8(&chunk_type).unwrap_or("????"),
+                )
+                .into(),
+            ));
         }
 
         match &chunk_type {
@@ -572,10 +582,9 @@ fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>> {
         ));
     }
     if cmf & 0x0F != 8 {
-        return Err(Error::Unsupported(format!(
-            "unsupported zlib compression method: {}",
-            cmf & 0x0F
-        ).into()));
+        return Err(Error::Unsupported(
+            format!("unsupported zlib compression method: {}", cmf & 0x0F).into(),
+        ));
     }
     if cmf >> 4 > 7 {
         return Err(Error::Unsupported("zlib window size is too large".into()));
@@ -868,11 +877,14 @@ fn unfilter_scanlines(
         .checked_mul(height as usize)
         .ok_or_else(|| Error::InvalidData("filtered data size overflow".into()))?;
     if filtered.len() != expected_len {
-        return Err(Error::InvalidData(format!(
-            "unexpected filtered data size: expected {}, got {}",
-            expected_len,
-            filtered.len()
-        ).into()));
+        return Err(Error::InvalidData(
+            format!(
+                "unexpected filtered data size: expected {}, got {}",
+                expected_len,
+                filtered.len()
+            )
+            .into(),
+        ));
     }
 
     let bpp = header.filter_bpp();
@@ -922,10 +934,9 @@ fn unfilter_scanlines(
                 }
             }
             _ => {
-                return Err(Error::InvalidData(format!(
-                    "unsupported PNG filter type: {}",
-                    filter
-                ).into()));
+                return Err(Error::InvalidData(
+                    format!("unsupported PNG filter type: {}", filter).into(),
+                ));
             }
         }
     }
@@ -1518,10 +1529,13 @@ fn validate_exact_bit_depth(
     if allowed.contains(&bit_depth) {
         Ok(())
     } else {
-        Err(Error::Unsupported(format!(
-            "{color_mode:?} encoding does not support {}-bit output",
-            bit_depth.as_u8()
-        ).into()))
+        Err(Error::Unsupported(
+            format!(
+                "{color_mode:?} encoding does not support {}-bit output",
+                bit_depth.as_u8()
+            )
+            .into(),
+        ))
     }
 }
 
@@ -1539,10 +1553,13 @@ fn validate_grayscale_bit_depth(pixels: &[[u8; 4]], bit_depth: PngBitDepth) -> R
     if grayscale_pixels_fit_bit_depth(pixels, bit_depth) {
         Ok(())
     } else {
-        Err(Error::Unsupported(format!(
-            "grayscale pixels are not exactly representable at {}-bit",
-            bit_depth.as_u8()
-        ).into()))
+        Err(Error::Unsupported(
+            format!(
+                "grayscale pixels are not exactly representable at {}-bit",
+                bit_depth.as_u8()
+            )
+            .into(),
+        ))
     }
 }
 
@@ -1579,10 +1596,13 @@ fn validate_indexed_bit_depth(size: usize, bit_depth: PngBitDepth) -> Result<()>
     if size <= capacity {
         Ok(())
     } else {
-        Err(Error::Unsupported(format!(
-            "indexed palette of size {size} does not fit in {}-bit output",
-            bit_depth.as_u8()
-        ).into()))
+        Err(Error::Unsupported(
+            format!(
+                "indexed palette of size {size} does not fit in {}-bit output",
+                bit_depth.as_u8()
+            )
+            .into(),
+        ))
     }
 }
 
@@ -1986,11 +2006,14 @@ fn adam7_pass_window<'a>(
 
 fn finish_adam7_offset(filtered: &[u8], offset: usize) -> Result<()> {
     if offset != filtered.len() {
-        Err(Error::InvalidData(format!(
-            "unexpected Adam7 data size: consumed {}, got {}",
-            offset,
-            filtered.len()
-        ).into()))
+        Err(Error::InvalidData(
+            format!(
+                "unexpected Adam7 data size: consumed {}, got {}",
+                offset,
+                filtered.len()
+            )
+            .into(),
+        ))
     } else {
         Ok(())
     }
