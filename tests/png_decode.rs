@@ -132,6 +132,62 @@ fn decodes_16bit_rgba() {
 }
 
 #[test]
+fn decodes_rgba_interlaced() {
+    let image =
+        PngImage::from_bytes(include_bytes!("data/rgba_interlaced.png")).expect("infallible");
+    assert_eq!(image.width(), 4);
+    assert_eq!(image.height(), 4);
+    // Re-encode as non-interlaced and verify roundtrip.
+    let rgba = rgba8(image.pixels());
+    let pixels = PngPixels::from_rgba8(rgba.clone());
+    let rt = PngImage::new(
+        4,
+        4,
+        pixels,
+        nopng::PngEncoding {
+            color_mode: nopng::PngColorMode::Rgba,
+            bit_depth: nopng::PngBitDepth::Eight,
+            interlaced: false,
+        },
+    )
+    .expect("infallible");
+    let bytes = rt.to_bytes().expect("infallible");
+    let decoded = PngImage::from_bytes(&bytes).expect("infallible");
+    assert_eq!(rgba8(decoded.pixels()), rgba);
+}
+
+#[test]
+fn decodes_palette_interlaced() {
+    let image =
+        PngImage::from_bytes(include_bytes!("data/palette_interlaced.png")).expect("infallible");
+    assert!(image.width() > 0);
+    assert!(image.height() > 0);
+    assert_eq!(
+        image.pixels().color_mode(),
+        nopng::PngColorMode::Indexed
+    );
+    // Verify we can roundtrip through RGBA.
+    let rgba = rgba8(image.pixels());
+    assert!(!rgba.is_empty());
+}
+
+#[test]
+fn decodes_gray16_interlaced() {
+    let image =
+        PngImage::from_bytes(include_bytes!("data/gray16_interlaced.png")).expect("infallible");
+    assert_eq!(image.width(), 5);
+    assert_eq!(image.height(), 4);
+    assert_eq!(image.pixels().bit_depth(), nopng::PngBitDepth::Sixteen);
+    // This file may contain a tRNS chunk, resulting in GrayscaleAlpha.
+    assert!(matches!(
+        image.pixels().color_mode(),
+        nopng::PngColorMode::Grayscale | nopng::PngColorMode::GrayscaleAlpha
+    ));
+    let rgba = rgba8(image.pixels());
+    assert_eq!(rgba.len(), 5 * 4 * 4);
+}
+
+#[test]
 fn rejects_crc_mismatch() {
     let mut bytes = include_bytes!("data/gray_filters.png").to_vec();
     let index = bytes.len() - 1;

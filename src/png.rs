@@ -122,6 +122,7 @@ impl<'a> PngImage<'a> {
             ));
         }
         validate_pixels(&pixels)?;
+        validate_encoding_compatibility(&pixels, &encoding)?;
         Ok(Self {
             width,
             height,
@@ -211,6 +212,33 @@ impl<'a> PngImage<'a> {
 
         Ok(bytes)
     }
+}
+
+fn validate_encoding_compatibility(pixels: &PngPixels<'_>, encoding: &PngEncoding) -> Result<()> {
+    let is_16bit_pixels = matches!(
+        pixels.bit_depth(),
+        PngBitDepth::Sixteen
+    );
+    let is_16bit_encoding = encoding.bit_depth == PngBitDepth::Sixteen;
+
+    // 16-bit pixels require 16-bit encoding and vice versa.
+    if is_16bit_pixels != is_16bit_encoding {
+        return Err(Error::Unsupported(
+            "16-bit pixels require 16-bit encoding and vice versa".into(),
+        ));
+    }
+
+    // Indexed encoding with non-8-bit depth requires indexed pixels or <=256 color RGBA pixels.
+    // This is validated at encode time, so no extra check here.
+
+    // 16-bit indexed encoding is not supported.
+    if encoding.color_mode == PngColorMode::Indexed && is_16bit_encoding {
+        return Err(Error::Unsupported(
+            "16-bit indexed encoding is not supported".into(),
+        ));
+    }
+
+    Ok(())
 }
 
 pub(crate) fn adam7_axis_size(size: u32, start: u8, step: u8) -> u32 {
@@ -396,6 +424,126 @@ mod tests {
                 .expect("infallible"),
             pixels.to_rgba8().as_u8_slice().expect("infallible")
         );
+    }
+
+    #[test]
+    fn roundtrip_grayscale_alpha() {
+        let pixels =
+            PngPixels::from_gray_alpha8(vec![0, 255, 128, 64, 255, 128, 50, 200, 200, 100]);
+        let image = PngImage::new(
+            5,
+            1,
+            pixels.clone(),
+            PngEncoding {
+                color_mode: PngColorMode::GrayscaleAlpha,
+                bit_depth: PngBitDepth::Eight,
+                interlaced: false,
+            },
+        )
+        .expect("infallible");
+        let bytes = image.to_bytes().expect("infallible");
+        let decoded = PngImage::from_bytes(&bytes).expect("infallible");
+        assert_eq!(
+            decoded
+                .pixels()
+                .to_rgba8()
+                .as_u8_slice()
+                .expect("infallible"),
+            pixels.to_rgba8().as_u8_slice().expect("infallible")
+        );
+    }
+
+    #[test]
+    fn roundtrip_indexed_with_alpha() {
+        let pixels = PngPixels::from_rgba8(vec![
+            255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 0, 255, 255, 255, 64,
+        ]);
+        let mut image = PngImage::new(2, 2, pixels.clone(), PngEncoding::for_pixels(&pixels))
+            .expect("infallible");
+        *image.encoding_mut() = PngEncoding {
+            color_mode: PngColorMode::Indexed,
+            bit_depth: PngBitDepth::Eight,
+            interlaced: false,
+        };
+        let bytes = image.to_bytes().expect("infallible");
+        let decoded = PngImage::from_bytes(&bytes).expect("infallible");
+        assert_eq!(
+            decoded
+                .pixels()
+                .to_rgba8()
+                .as_u8_slice()
+                .expect("infallible"),
+            pixels.to_rgba8().as_u8_slice().expect("infallible")
+        );
+    }
+
+    #[test]
+    fn roundtrip_16bit_grayscale() {
+        let pixels = PngPixels::from_gray16(vec![0, 32768, 65535, 1000]);
+        let image = PngImage::new(
+            2,
+            2,
+            pixels.clone(),
+            PngEncoding {
+                color_mode: PngColorMode::Grayscale,
+                bit_depth: PngBitDepth::Sixteen,
+                interlaced: false,
+            },
+        )
+        .expect("infallible");
+        let bytes = image.to_bytes().expect("infallible");
+        let decoded = PngImage::from_bytes(&bytes).expect("infallible");
+        assert_eq!(
+            decoded.pixels().as_u16_slice().expect("infallible"),
+            pixels.as_u16_slice().expect("infallible")
+        );
+    }
+
+    #[test]
+    fn roundtrip_indexed_direct_fast_path() {
+        // Indexed8 pixels encoded as Indexed8 should use fast path.
+        let indices = vec![0, 1, 2, 0, 1, 2];
+        let palette = vec![255, 0, 0, 0, 255, 0, 0, 0, 255];
+        let trns: Vec<u8> = vec![255, 128, 0];
+        let pixels =
+            PngPixels::from_indexed8(indices.clone(), palette.clone(), Some(trns.clone()));
+        let image = PngImage::new(
+            3,
+            2,
+            pixels.clone(),
+            PngEncoding {
+                color_mode: PngColorMode::Indexed,
+                bit_depth: PngBitDepth::Eight,
+                interlaced: false,
+            },
+        )
+        .expect("infallible");
+        let bytes = image.to_bytes().expect("infallible");
+        let decoded = PngImage::from_bytes(&bytes).expect("infallible");
+        assert_eq!(
+            decoded
+                .pixels()
+                .to_rgba8()
+                .as_u8_slice()
+                .expect("infallible"),
+            pixels.to_rgba8().as_u8_slice().expect("infallible")
+        );
+    }
+
+    #[test]
+    fn rejects_16bit_pixels_with_8bit_encoding() {
+        let error = PngImage::new(
+            1,
+            1,
+            PngPixels::from_rgba16(vec![0, 0, 0, 0]),
+            PngEncoding {
+                color_mode: PngColorMode::Rgba,
+                bit_depth: PngBitDepth::Eight,
+                interlaced: false,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::Unsupported(_)));
     }
 
     struct IhdrInfo {

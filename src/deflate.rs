@@ -192,9 +192,19 @@ fn copy_from_distance(output: &mut Vec<u8>, distance: usize, length: usize) -> R
     }
 
     let start = output.len() - distance;
-    for index in 0..length {
-        let byte = output[start + (index % distance)];
-        output.push(byte);
+    if distance >= length {
+        // Non-overlapping: bulk copy.
+        output.extend_from_within(start..start + length);
+    } else {
+        // Overlapping: the source pattern repeats. Copy in chunks.
+        output.reserve(length);
+        let mut remaining = length;
+        while remaining > 0 {
+            let copy_len = remaining.min(distance);
+            let start = output.len() - distance;
+            output.extend_from_within(start..start + copy_len);
+            remaining -= copy_len;
+        }
     }
     Ok(())
 }
@@ -680,94 +690,90 @@ fn ordinary_huffman_optimal_max_bitwidth(frequencies: &[usize]) -> u8 {
 }
 
 fn package_merge_code_lengths(frequencies: &[usize], max_bitwidth: u8) -> Vec<u8> {
+    // Each node tracks per-symbol counts instead of a Vec<u16> to avoid
+    // quadratic memory growth during merge iterations.
+    let symbol_count = frequencies.len();
+
     #[derive(Debug, Clone)]
     struct Node {
-        symbols: Vec<u16>,
+        counts: Vec<u8>,
         weight: usize,
     }
 
     impl Node {
-        fn empty() -> Self {
+        fn empty(symbol_count: usize) -> Self {
             Self {
-                symbols: Vec::new(),
+                counts: vec![0; symbol_count],
                 weight: 0,
             }
         }
 
-        fn single(symbol: u16, weight: usize) -> Self {
-            Self {
-                symbols: vec![symbol],
-                weight,
-            }
+        fn single(symbol: usize, weight: usize, symbol_count: usize) -> Self {
+            let mut counts = vec![0; symbol_count];
+            counts[symbol] = 1;
+            Self { counts, weight }
         }
 
-        fn merge(&mut self, other: Self) {
+        fn merge(&mut self, other: &Self) {
             self.weight += other.weight;
-            self.symbols.extend(other.symbols);
+            for (a, &b) in self.counts.iter_mut().zip(other.counts.iter()) {
+                *a += b;
+            }
         }
     }
 
     fn merge_nodes(left: Vec<Node>, right: Vec<Node>) -> Vec<Node> {
         let mut merged = Vec::with_capacity(left.len() + right.len());
-        let mut left = left.into_iter().peekable();
-        let mut right = right.into_iter().peekable();
-        loop {
-            match (
-                left.peek().map(|node| node.weight),
-                right.peek().map(|node| node.weight),
-            ) {
-                (None, None) => break,
-                (Some(_), None) => {
-                    merged.extend(left);
-                    break;
-                }
-                (None, Some(_)) => {
-                    merged.extend(right);
-                    break;
-                }
-                (Some(left_weight), Some(right_weight)) => {
-                    if left_weight < right_weight {
-                        merged.push(left.next().unwrap());
-                    } else {
-                        merged.push(right.next().unwrap());
-                    }
-                }
+        let mut li = 0;
+        let mut ri = 0;
+        while li < left.len() && ri < right.len() {
+            if left[li].weight < right[ri].weight {
+                merged.push(left[li].clone());
+                li += 1;
+            } else {
+                merged.push(right[ri].clone());
+                ri += 1;
             }
         }
+        merged.extend_from_slice(&left[li..]);
+        merged.extend_from_slice(&right[ri..]);
         merged
     }
 
-    fn package(mut nodes: Vec<Node>) -> Vec<Node> {
-        if nodes.len() >= 2 {
-            let new_len = nodes.len() / 2;
-            for index in 0..new_len {
-                nodes[index] = core::mem::replace(&mut nodes[index * 2], Node::empty());
-                let other = core::mem::replace(&mut nodes[index * 2 + 1], Node::empty());
-                nodes[index].merge(other);
-            }
-            nodes.truncate(new_len);
+    fn package(nodes: &[Node], symbol_count: usize) -> Vec<Node> {
+        if nodes.len() < 2 {
+            return nodes.to_vec();
         }
-        nodes
+        let new_len = nodes.len() / 2;
+        let mut result = Vec::with_capacity(new_len);
+        for i in 0..new_len {
+            let mut merged = Node::empty(symbol_count);
+            merged.merge(&nodes[i * 2]);
+            merged.merge(&nodes[i * 2 + 1]);
+            result.push(merged);
+        }
+        result
     }
 
-    let mut source = frequencies
+    let mut source: Vec<Node> = frequencies
         .iter()
         .enumerate()
         .filter(|(_, frequency)| **frequency > 0)
-        .map(|(symbol, frequency)| Node::single(symbol as u16, *frequency))
-        .collect::<Vec<_>>();
+        .map(|(symbol, frequency)| Node::single(symbol, *frequency, symbol_count))
+        .collect();
     source.sort_by_key(|node| node.weight);
 
-    let weighted = (0..max_bitwidth.saturating_sub(1)).fold(source.clone(), |weighted, _| {
-        merge_nodes(package(weighted), source.clone())
-    });
+    let weighted =
+        (0..max_bitwidth.saturating_sub(1)).fold(source.clone(), |weighted, _| {
+            merge_nodes(package(&weighted, symbol_count), source.clone())
+        });
 
-    let mut widths = vec![0u8; frequencies.len()];
-    for symbol in package(weighted)
-        .into_iter()
-        .flat_map(|node| node.symbols.into_iter())
-    {
-        widths[symbol as usize] += 1;
+    let mut widths = vec![0u8; symbol_count];
+    let packaged = package(&weighted, symbol_count);
+    for node in &packaged {
+        for (symbol, &count) in node.counts.iter().enumerate() {
+            widths[symbol] += count;
+        }
     }
     widths
 }

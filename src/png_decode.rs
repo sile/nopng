@@ -6,10 +6,18 @@ use alloc::vec::Vec;
 use crate::png_pixels::{
     PngPixels, downsample_u16, flatten_palette, scale_sample_to_u8, upscale_u8_to_u16,
 };
+use crate::chunk::IhdrChunk;
 use crate::png_types::{Error, Result};
 use crate::{adler32, crc, deflate};
 
 use crate::png::{ADAM7_PASSES, Adam7Pass, PNG_SIGNATURE, adam7_axis_size};
+
+// Short aliases for color type constants used in match patterns.
+const CT_GRAY: u8 = IhdrChunk::COLOR_TYPE_GRAYSCALE;
+const CT_RGB: u8 = IhdrChunk::COLOR_TYPE_RGB;
+const CT_INDEXED: u8 = IhdrChunk::COLOR_TYPE_INDEXED;
+const CT_GRAY_ALPHA: u8 = IhdrChunk::COLOR_TYPE_GRAYSCALE_ALPHA;
+const CT_RGBA: u8 = IhdrChunk::COLOR_TYPE_RGBA;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PngHeader {
@@ -97,11 +105,11 @@ impl PngHeader {
             ));
         }
         match (self.color_type, self.bit_depth) {
-            (0, 1 | 2 | 4 | 8 | 16)
-            | (3, 1 | 2 | 4 | 8)
-            | (2, 8 | 16)
-            | (4, 8 | 16)
-            | (6, 8 | 16) => Ok(()),
+            (CT_GRAY, 1 | 2 | 4 | 8 | 16)
+            | (CT_INDEXED, 1 | 2 | 4 | 8)
+            | (CT_RGB, 8 | 16)
+            | (CT_GRAY_ALPHA, 8 | 16)
+            | (CT_RGBA, 8 | 16) => Ok(()),
             _ => Err(Error::Unsupported(
                 format!(
                     "unsupported color type/bit depth combination: color_type={}, bit_depth={}",
@@ -114,10 +122,10 @@ impl PngHeader {
 
     pub(crate) fn samples_per_pixel(&self) -> usize {
         match self.color_type {
-            0 | 3 => 1,
-            2 => 3,
-            4 => 2,
-            6 => 4,
+            CT_GRAY | CT_INDEXED => 1,
+            CT_RGB => 3,
+            CT_GRAY_ALPHA => 2,
+            CT_RGBA => 4,
             _ => unreachable!(),
         }
     }
@@ -170,18 +178,18 @@ impl AncillaryChunks {
     }
 
     fn validate(&self, header: &PngHeader) -> Result<()> {
-        if header.color_type == 3 && self.palette.is_none() {
+        if header.color_type == CT_INDEXED && self.palette.is_none() {
             return Err(Error::InvalidData("missing PLTE for palette image".into()));
         }
-        if matches!(header.color_type, 0 | 4) && self.palette.is_some() {
+        if matches!(header.color_type, CT_GRAY | CT_GRAY_ALPHA) && self.palette.is_some() {
             return Err(Error::InvalidData(
                 "PLTE chunk is not allowed for grayscale images".into(),
             ));
         }
         match (&self.transparency, header.color_type) {
-            (Some(Transparency::Grayscale(_)), 0) => {}
-            (Some(Transparency::Truecolor(_)), 2) => {}
-            (Some(Transparency::Palette(alpha)), 3) => {
+            (Some(Transparency::Grayscale(_)), CT_GRAY) => {}
+            (Some(Transparency::Truecolor(_)), CT_RGB) => {}
+            (Some(Transparency::Palette(alpha)), CT_INDEXED) => {
                 let palette_len = self.palette.as_ref().map_or(0, Vec::len);
                 if alpha.len() > palette_len {
                     return Err(Error::InvalidData(
@@ -317,7 +325,7 @@ fn parse_png(bytes: &[u8]) -> Result<(PngHeader, AncillaryChunks, Vec<u8>)> {
                 if seen_idat {
                     return Err(Error::InvalidData("PLTE appears after IDAT".into()));
                 }
-                if matches!(header.color_type, 0 | 4) {
+                if matches!(header.color_type, CT_GRAY | CT_GRAY_ALPHA) {
                     return Err(Error::InvalidData(
                         "PLTE chunk is not allowed for grayscale images".into(),
                     ));
@@ -382,7 +390,7 @@ fn parse_transparency(
     ancillary: &AncillaryChunks,
 ) -> Result<Transparency> {
     match header.color_type {
-        0 => {
+        CT_GRAY => {
             if chunk_data.len() != 2 {
                 return Err(Error::InvalidData(
                     "grayscale tRNS chunk must contain 2 bytes".into(),
@@ -401,7 +409,7 @@ fn parse_transparency(
             }
             Ok(Transparency::Grayscale(sample))
         }
-        2 => {
+        CT_RGB => {
             if chunk_data.len() != 6 {
                 return Err(Error::InvalidData(
                     "truecolor tRNS chunk must contain 6 bytes".into(),
@@ -413,7 +421,7 @@ fn parse_transparency(
                 u16::from_be_bytes([chunk_data[4], chunk_data[5]]),
             ]))
         }
-        3 => {
+        CT_INDEXED => {
             if ancillary.palette.is_none() {
                 return Err(Error::InvalidData(
                     "tRNS chunk must appear after PLTE".into(),
@@ -489,10 +497,10 @@ fn convert_to_pixels(
     ancillary: &AncillaryChunks,
 ) -> Result<PngPixels<'static>> {
     match (header.color_type, header.bit_depth) {
-        (0, 1) => convert_grayscale_low_bit_to_pixels(header, width, raw, ancillary, 1),
-        (0, 2) => convert_grayscale_low_bit_to_pixels(header, width, raw, ancillary, 2),
-        (0, 4) => convert_grayscale_low_bit_to_pixels(header, width, raw, ancillary, 4),
-        (0, 8) => {
+        (CT_GRAY, 1) => convert_grayscale_low_bit_to_pixels(header, width, raw, ancillary, 1),
+        (CT_GRAY, 2) => convert_grayscale_low_bit_to_pixels(header, width, raw, ancillary, 2),
+        (CT_GRAY, 4) => convert_grayscale_low_bit_to_pixels(header, width, raw, ancillary, 4),
+        (CT_GRAY, 8) => {
             let transparent = match ancillary.transparency {
                 Some(Transparency::Grayscale(value)) => Some(value),
                 _ => None,
@@ -514,7 +522,7 @@ fn convert_to_pixels(
                 Ok(PngPixels::Gray8(Cow::Owned(raw.to_vec())))
             }
         }
-        (0, 16) => {
+        (CT_GRAY, 16) => {
             let transparent = match ancillary.transparency {
                 Some(Transparency::Grayscale(value)) => Some(value),
                 _ => None,
@@ -535,7 +543,7 @@ fn convert_to_pixels(
                 Ok(PngPixels::Gray16(Cow::Owned(samples)))
             }
         }
-        (2, 8) => {
+        (CT_RGB, 8) => {
             let transparent = match ancillary.transparency {
                 Some(Transparency::Truecolor(value)) => Some(value),
                 _ => None,
@@ -557,7 +565,7 @@ fn convert_to_pixels(
                 Ok(PngPixels::Rgb8(Cow::Owned(raw.to_vec())))
             }
         }
-        (2, 16) => {
+        (CT_RGB, 16) => {
             let transparent = match ancillary.transparency {
                 Some(Transparency::Truecolor(value)) => Some(value),
                 _ => None,
@@ -585,17 +593,17 @@ fn convert_to_pixels(
                 Ok(PngPixels::Rgb16(Cow::Owned(samples)))
             }
         }
-        (3, 1 | 2 | 4 | 8) => convert_indexed_to_pixels(header, width, raw, ancillary),
-        (4, 8) => Ok(PngPixels::GrayAlpha8(Cow::Owned(raw.to_vec()))),
-        (4, 16) => Ok(PngPixels::GrayAlpha16(Cow::Owned(
+        (CT_INDEXED, 1 | 2 | 4 | 8) => convert_indexed_to_pixels(header, width, raw, ancillary),
+        (CT_GRAY_ALPHA, 8) => Ok(PngPixels::GrayAlpha8(Cow::Owned(raw.to_vec()))),
+        (CT_GRAY_ALPHA, 16) => Ok(PngPixels::GrayAlpha16(Cow::Owned(
             raw.as_chunks::<2>()
                 .0
                 .iter()
                 .map(|chunk| u16::from_be_bytes(*chunk))
                 .collect(),
         ))),
-        (6, 8) => Ok(PngPixels::Rgba8(Cow::Owned(raw.to_vec()))),
-        (6, 16) => Ok(PngPixels::Rgba16(Cow::Owned(
+        (CT_RGBA, 8) => Ok(PngPixels::Rgba8(Cow::Owned(raw.to_vec()))),
+        (CT_RGBA, 16) => Ok(PngPixels::Rgba16(Cow::Owned(
             raw.as_chunks::<2>()
                 .0
                 .iter()
@@ -700,7 +708,7 @@ fn convert_to_rgba16(
         .ok_or_else(|| Error::InvalidData("pixel count overflow".into()))?;
     let mut rgba = Vec::with_capacity(pixel_count * 4);
     match (header.color_type, header.bit_depth) {
-        (0, 1 | 2 | 4) => {
+        (CT_GRAY, 1 | 2 | 4) => {
             let row_stride = packed_stride_for_width(header, width)?;
             let transparent = match ancillary.transparency {
                 Some(Transparency::Grayscale(value)) => Some(value),
@@ -719,7 +727,7 @@ fn convert_to_rgba16(
                 }
             }
         }
-        (0, 8) => {
+        (CT_GRAY, 8) => {
             let transparent = match ancillary.transparency {
                 Some(Transparency::Grayscale(value)) => Some(value),
                 _ => None,
@@ -734,7 +742,7 @@ fn convert_to_rgba16(
                 rgba.extend_from_slice(&[gray, gray, gray, alpha]);
             }
         }
-        (0, 16) => {
+        (CT_GRAY, 16) => {
             let transparent = match ancillary.transparency {
                 Some(Transparency::Grayscale(value)) => Some(value),
                 _ => None,
@@ -751,7 +759,7 @@ fn convert_to_rgba16(
                 rgba.extend_from_slice(&[gray, gray, gray, alpha]);
             }
         }
-        (2, 8) => {
+        (CT_RGB, 8) => {
             let transparent = match ancillary.transparency {
                 Some(Transparency::Truecolor(value)) => Some(value),
                 _ => None,
@@ -773,7 +781,7 @@ fn convert_to_rgba16(
                 ]);
             }
         }
-        (2, 16) => {
+        (CT_RGB, 16) => {
             let transparent = match ancillary.transparency {
                 Some(Transparency::Truecolor(value)) => Some(value),
                 _ => None,
@@ -794,11 +802,11 @@ fn convert_to_rgba16(
                 rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], alpha]);
             }
         }
-        (3, 1 | 2 | 4 | 8) => {
+        (CT_INDEXED, 1 | 2 | 4 | 8) => {
             let palette_pixels = convert_indexed_to_pixels(header, width, raw, ancillary)?;
             rgba.extend(palette_pixels.to_rgba16_vec());
         }
-        (4, 8) => {
+        (CT_GRAY_ALPHA, 8) => {
             let (pixels, remainder) = raw.as_chunks::<2>();
             debug_assert!(remainder.is_empty());
             for &[gray, alpha] in pixels {
@@ -807,7 +815,7 @@ fn convert_to_rgba16(
                 rgba.extend_from_slice(&[gray, gray, gray, alpha]);
             }
         }
-        (4, 16) => {
+        (CT_GRAY_ALPHA, 16) => {
             let (pixels, remainder) = raw.as_chunks::<4>();
             debug_assert!(remainder.is_empty());
             for &[g0, g1, a0, a1] in pixels {
@@ -816,7 +824,7 @@ fn convert_to_rgba16(
                 rgba.extend_from_slice(&[gray, gray, gray, alpha]);
             }
         }
-        (6, 8) => {
+        (CT_RGBA, 8) => {
             let (pixels, remainder) = raw.as_chunks::<4>();
             debug_assert!(remainder.is_empty());
             for &[r, g, b, a] in pixels {
@@ -828,7 +836,7 @@ fn convert_to_rgba16(
                 ]);
             }
         }
-        (6, 16) => {
+        (CT_RGBA, 16) => {
             let (pixels, remainder) = raw.as_chunks::<8>();
             debug_assert!(remainder.is_empty());
             for &[r0, r1, g0, g1, b0, b1, a0, a1] in pixels {
@@ -862,7 +870,7 @@ fn pixels_from_rgba16_source(
         header.bit_depth,
         ancillary.transparency.is_some(),
     ) {
-        (0, 16, false) => {
+        (CT_GRAY, 16, false) => {
             let (pixels, remainder) = rgba.as_chunks::<4>();
             debug_assert!(remainder.is_empty());
             let data = pixels
@@ -871,7 +879,7 @@ fn pixels_from_rgba16_source(
                 .collect::<Vec<_>>();
             PngPixels::Gray16(Cow::Owned(data))
         }
-        (0, _, true) => {
+        (CT_GRAY, _, true) => {
             if header.bit_depth == 16 {
                 let mut data = Vec::with_capacity(rgba.len() / 2);
                 let (pixels, remainder) = rgba.as_chunks::<4>();
@@ -890,7 +898,7 @@ fn pixels_from_rgba16_source(
                 PngPixels::GrayAlpha8(Cow::Owned(data))
             }
         }
-        (2, 16, false) => {
+        (CT_RGB, 16, false) => {
             let (pixels, remainder) = rgba.as_chunks::<4>();
             debug_assert!(remainder.is_empty());
             let data = pixels
@@ -899,7 +907,7 @@ fn pixels_from_rgba16_source(
                 .collect::<Vec<_>>();
             PngPixels::Rgb16(Cow::Owned(data))
         }
-        (2, _, true) => {
+        (CT_RGB, _, true) => {
             if header.bit_depth == 16 {
                 PngPixels::Rgba16(Cow::Owned(rgba.to_vec()))
             } else {
@@ -908,7 +916,7 @@ fn pixels_from_rgba16_source(
                 ))
             }
         }
-        (4, 8, _) => {
+        (CT_GRAY_ALPHA, 8, _) => {
             let mut data = Vec::with_capacity(rgba.len() / 2);
             let (pixels, remainder) = rgba.as_chunks::<4>();
             debug_assert!(remainder.is_empty());
@@ -917,7 +925,7 @@ fn pixels_from_rgba16_source(
             }
             PngPixels::GrayAlpha8(Cow::Owned(data))
         }
-        (4, 16, _) => {
+        (CT_GRAY_ALPHA, 16, _) => {
             let mut data = Vec::with_capacity(rgba.len() / 2);
             let (pixels, remainder) = rgba.as_chunks::<4>();
             debug_assert!(remainder.is_empty());
@@ -926,10 +934,10 @@ fn pixels_from_rgba16_source(
             }
             PngPixels::GrayAlpha16(Cow::Owned(data))
         }
-        (6, 8, _) => PngPixels::Rgba8(Cow::Owned(
+        (CT_RGBA, 8, _) => PngPixels::Rgba8(Cow::Owned(
             rgba.iter().copied().map(downsample_u16).collect(),
         )),
-        (6, 16, _) => PngPixels::Rgba16(Cow::Owned(rgba.to_vec())),
+        (CT_RGBA, 16, _) => PngPixels::Rgba16(Cow::Owned(rgba.to_vec())),
         _ => {
             let (pixels, remainder) = rgba.as_chunks::<4>();
             debug_assert!(remainder.is_empty());
@@ -1117,7 +1125,7 @@ fn decode_adam7_to_pixels(
         header.bit_depth,
         ancillary.transparency.is_some(),
     ) {
-        (0, 1, false) | (0, 2, false) | (0, 4, false) => {
+        (CT_GRAY, 1, false) | (CT_GRAY, 2, false) | (CT_GRAY, 4, false) => {
             let mut samples = vec![0u8; pixel_count];
             for pass in ADAM7_PASSES {
                 let (pass_width, pass_height, pass_filtered) =
@@ -1153,7 +1161,7 @@ fn decode_adam7_to_pixels(
                 _ => unreachable!(),
             })
         }
-        (3, 1 | 2 | 4 | 8, _) => {
+        (CT_INDEXED, 1 | 2 | 4 | 8, _) => {
             let mut indices = vec![0u8; pixel_count];
             for pass in ADAM7_PASSES {
                 let (pass_width, pass_height, pass_filtered) =
@@ -1213,22 +1221,22 @@ fn decode_adam7_to_pixels(
             })
         }
         // 8-bit types without tRNS: scatter raw bytes directly (no RGBA16 detour).
-        (0, 8, false) => {
+        (CT_GRAY, 8, false) => {
             let data = adam7_scatter_raw_bytes(header, filtered, &mut offset, 1)?;
             finish_adam7_offset(filtered, offset)?;
             Ok(PngPixels::Gray8(Cow::Owned(data)))
         }
-        (4, 8, _) => {
+        (CT_GRAY_ALPHA, 8, _) => {
             let data = adam7_scatter_raw_bytes(header, filtered, &mut offset, 2)?;
             finish_adam7_offset(filtered, offset)?;
             Ok(PngPixels::GrayAlpha8(Cow::Owned(data)))
         }
-        (2, 8, false) => {
+        (CT_RGB, 8, false) => {
             let data = adam7_scatter_raw_bytes(header, filtered, &mut offset, 3)?;
             finish_adam7_offset(filtered, offset)?;
             Ok(PngPixels::Rgb8(Cow::Owned(data)))
         }
-        (6, 8, _) => {
+        (CT_RGBA, 8, _) => {
             let data = adam7_scatter_raw_bytes(header, filtered, &mut offset, 4)?;
             finish_adam7_offset(filtered, offset)?;
             Ok(PngPixels::Rgba8(Cow::Owned(data)))
