@@ -11,3 +11,7 @@ readme = "README.md"
 categories = ["multimedia::images"]
 
 [dependencies]
+
+[workspace]
+members = ["pbt"]
+exclude = ["fuzz"]
