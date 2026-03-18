@@ -1,16 +1,15 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use nopng::PngImage;
+use nopng::{ImageSpec, encode_image, decode_image};
 
 fuzz_target!(|data: &[u8]| {
-    if let Ok(image) = PngImage::from_bytes(data) {
-        let _ = image.width();
-        let _ = image.height();
-        let _ = image.data();
+    if let Ok((spec, pixels)) = decode_image(data) {
+        let _ = spec.width;
+        let _ = spec.height;
 
-        if let Ok(encoded) = image.to_bytes() {
-            let _ = PngImage::from_bytes(&encoded);
+        if let Ok(encoded) = encode_image(&spec, &pixels) {
+            let _ = decode_image(&encoded);
         }
     }
 });

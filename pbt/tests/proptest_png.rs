@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use nopng::{PngBitDepth, PngColorMode, PngEncoding, PngImage, PngPixels};
+use nopng::{BitDepth, ColorMode, ImageSpec, Pixels, decode_image, encode_image};
 use proptest::prelude::*;
 
 fn decode_with_png_crate(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), png::DecodingError> {
@@ -116,39 +116,34 @@ proptest! {
 
     #[test]
     fn roundtrip_random_rgba((width, height, rgba) in rgba_image_strategy(8, 8)) {
-        let pixels = PngPixels::Rgba8(rgba.clone().into());
-        let image = PngImage::new(width, height, pixels, PngEncoding {
-            color_mode: PngColorMode::Rgba,
-            bit_depth: PngBitDepth::Eight,
+        let pixels = Pixels::Rgba8(rgba.clone().into());
+        let spec = ImageSpec {
+            width,
+            height,
+            color_mode: ColorMode::Rgba,
+            bit_depth: BitDepth::Eight,
             interlaced: false,
-        }).expect("infallible");
-        let encoded = image.to_bytes().expect("infallible");
+        };
+        let encoded = encode_image(&spec, &pixels).expect("infallible");
 
-        let decoded = PngImage::from_bytes(&encoded).expect("infallible");
-        let decoded_rgba = decoded.pixels().to_rgba8();
-        prop_assert_eq!(decoded.width(), width);
-        prop_assert_eq!(decoded.height(), height);
-        prop_assert_eq!(decoded_rgba.as_u8_slice().expect("infallible"), rgba.as_slice());
+        let (decoded_spec, decoded_pixels) = decode_image(&encoded).expect("infallible");
+        let decoded_rgba = decoded_pixels.to_rgba8();
+        prop_assert_eq!(decoded_spec.width, width);
+        prop_assert_eq!(decoded_spec.height, height);
+        prop_assert_eq!(decoded_rgba.as_u8_storage().expect("infallible"), rgba.as_slice());
     }
 
     #[test]
     fn encoded_png_matches_png_crate_for_grayscale((width, height, rgba) in grayscale_levels_strategy(), interlaced in any::<bool>()) {
-        let mut image = PngImage::new(
+        let pixels = Pixels::Rgba8(rgba.clone().into());
+        let spec = ImageSpec {
             width,
             height,
-            PngPixels::Rgba8(rgba.clone().into()),
-            PngEncoding {
-                color_mode: PngColorMode::Rgba,
-                bit_depth: PngBitDepth::Eight,
-                interlaced: false,
-            },
-        ).expect("infallible");
-        *image.encoding_mut() = PngEncoding {
-            color_mode: PngColorMode::Grayscale,
-            bit_depth: PngBitDepth::Two,
+            color_mode: ColorMode::Grayscale,
+            bit_depth: BitDepth::Two,
             interlaced,
         };
-        let encoded = image.to_bytes().expect("infallible");
+        let encoded = encode_image(&spec, &pixels).expect("infallible");
 
         let (decoded_width, decoded_height, decoded_rgba) =
             decode_with_png_crate(&encoded).expect("infallible");
@@ -159,22 +154,15 @@ proptest! {
 
     #[test]
     fn encoded_png_matches_png_crate_for_indexed((width, height, rgba) in indexed_image_strategy(), interlaced in any::<bool>()) {
-        let mut image = PngImage::new(
+        let pixels = Pixels::Rgba8(rgba.clone().into());
+        let spec = ImageSpec {
             width,
             height,
-            PngPixels::Rgba8(rgba.clone().into()),
-            PngEncoding {
-                color_mode: PngColorMode::Rgba,
-                bit_depth: PngBitDepth::Eight,
-                interlaced: false,
-            },
-        ).expect("infallible");
-        *image.encoding_mut() = PngEncoding {
-            color_mode: PngColorMode::Indexed,
-            bit_depth: PngBitDepth::Four,
+            color_mode: ColorMode::Indexed,
+            bit_depth: BitDepth::Four,
             interlaced,
         };
-        let encoded = image.to_bytes().expect("infallible");
+        let encoded = encode_image(&spec, &pixels).expect("infallible");
 
         let (decoded_width, decoded_height, decoded_rgba) =
             decode_with_png_crate(&encoded).expect("infallible");
@@ -185,40 +173,44 @@ proptest! {
 
     #[test]
     fn roundtrip_random_rgba_interlaced((width, height, rgba) in rgba_image_strategy(8, 8)) {
-        let pixels = PngPixels::Rgba8(rgba.clone().into());
-        let image = PngImage::new(width, height, pixels, PngEncoding {
-            color_mode: PngColorMode::Rgba,
-            bit_depth: PngBitDepth::Eight,
+        let pixels = Pixels::Rgba8(rgba.clone().into());
+        let spec = ImageSpec {
+            width,
+            height,
+            color_mode: ColorMode::Rgba,
+            bit_depth: BitDepth::Eight,
             interlaced: true,
-        }).expect("infallible");
-        let encoded = image.to_bytes().expect("infallible");
+        };
+        let encoded = encode_image(&spec, &pixels).expect("infallible");
 
-        let decoded = PngImage::from_bytes(&encoded).expect("infallible");
-        let decoded_rgba = decoded.pixels().to_rgba8();
-        prop_assert_eq!(decoded.width(), width);
-        prop_assert_eq!(decoded.height(), height);
-        prop_assert_eq!(decoded_rgba.as_u8_slice().expect("infallible"), rgba.as_slice());
+        let (decoded_spec, decoded_pixels) = decode_image(&encoded).expect("infallible");
+        let decoded_rgba = decoded_pixels.to_rgba8();
+        prop_assert_eq!(decoded_spec.width, width);
+        prop_assert_eq!(decoded_spec.height, height);
+        prop_assert_eq!(decoded_rgba.as_u8_storage().expect("infallible"), rgba.as_slice());
     }
 
     #[test]
     fn roundtrip_random_rgba16((width, height, samples) in rgba16_image_strategy(8, 8)) {
-        let pixels = PngPixels::Rgba16(samples.clone().into());
-        let image = PngImage::new(width, height, pixels, PngEncoding {
-            color_mode: PngColorMode::Rgba,
-            bit_depth: PngBitDepth::Sixteen,
+        let pixels = Pixels::Rgba16(samples.clone().into());
+        let spec = ImageSpec {
+            width,
+            height,
+            color_mode: ColorMode::Rgba,
+            bit_depth: BitDepth::Sixteen,
             interlaced: false,
-        }).expect("infallible");
-        let encoded = image.to_bytes().expect("infallible");
+        };
+        let encoded = encode_image(&spec, &pixels).expect("infallible");
 
-        let decoded = PngImage::from_bytes(&encoded).expect("infallible");
-        let decoded_rgba = decoded.pixels().to_rgba16();
-        prop_assert_eq!(decoded.width(), width);
-        prop_assert_eq!(decoded.height(), height);
-        prop_assert_eq!(decoded_rgba.as_u16_slice().expect("infallible"), samples.as_slice());
+        let (decoded_spec, decoded_pixels) = decode_image(&encoded).expect("infallible");
+        let decoded_rgba = decoded_pixels.to_rgba16();
+        prop_assert_eq!(decoded_spec.width, width);
+        prop_assert_eq!(decoded_spec.height, height);
+        prop_assert_eq!(decoded_rgba.as_u16_storage().expect("infallible"), samples.as_slice());
     }
 
     #[test]
     fn decoder_never_panics_on_arbitrary_bytes(data in proptest::collection::vec(any::<u8>(), 0..2048)) {
-        let _ = PngImage::from_bytes(&data);
+        let _ = decode_image(&data);
     }
 }

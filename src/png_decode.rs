@@ -5,9 +5,9 @@ use alloc::vec::Vec;
 
 use crate::chunk::IhdrChunk;
 use crate::png_pixels::{
-    PngPixels, downsample_u16, flatten_palette, scale_sample_to_u8, upscale_u8_to_u16,
+    Pixels, downsample_u16, flatten_palette, scale_sample_to_u8, upscale_u8_to_u16,
 };
-use crate::png_types::{Error, PngBitDepth, Result};
+use crate::png_types::{BitDepth, Error, Result};
 use crate::{adler32, crc, deflate};
 
 use crate::png::{ADAM7_PASSES, Adam7Pass, PNG_SIGNATURE, adam7_axis_size};
@@ -246,7 +246,7 @@ impl<'a> Cursor<'a> {
     }
 }
 
-pub(crate) fn decode_png(bytes: &[u8]) -> Result<(PngHeader, PngPixels<'static>)> {
+pub(crate) fn decode_png(bytes: &[u8]) -> Result<(PngHeader, Pixels<'static>)> {
     let (header, ancillary, idat_data) = parse_png(bytes)?;
     let expected_filtered = expected_filtered_len(&header)?;
     expected_raw_len(&header)?;
@@ -481,7 +481,7 @@ fn decode_to_pixels(
     header: &PngHeader,
     filtered: &[u8],
     ancillary: &AncillaryChunks,
-) -> Result<PngPixels<'static>> {
+) -> Result<Pixels<'static>> {
     if header.interlace_method == 0 {
         let raw = unfilter_scanlines(header, header.width, header.height, filtered)?;
         convert_to_pixels(header, header.width, &raw, ancillary)
@@ -495,7 +495,7 @@ fn convert_to_pixels(
     width: u32,
     raw: &[u8],
     ancillary: &AncillaryChunks,
-) -> Result<PngPixels<'static>> {
+) -> Result<Pixels<'static>> {
     match (header.color_type, header.bit_depth) {
         (CT_GRAY, 1) => convert_grayscale_low_bit_to_pixels(header, width, raw, ancillary, 1),
         (CT_GRAY, 2) => convert_grayscale_low_bit_to_pixels(header, width, raw, ancillary, 2),
@@ -517,10 +517,10 @@ fn convert_to_pixels(
                         },
                     ]);
                 }
-                Ok(PngPixels::GrayAlpha8(Cow::Owned(data)))
+                Ok(Pixels::GrayAlpha8(Cow::Owned(data)))
             } else {
-                Ok(PngPixels::Gray {
-                    bit_depth: PngBitDepth::Eight,
+                Ok(Pixels::Gray {
+                    bit_depth: BitDepth::Eight,
                     samples: Cow::Owned(raw.to_vec()),
                 })
             }
@@ -541,9 +541,9 @@ fn convert_to_pixels(
                 for gray in samples {
                     data.extend_from_slice(&[gray, if gray == transparent { 0 } else { u16::MAX }]);
                 }
-                Ok(PngPixels::GrayAlpha16(Cow::Owned(data)))
+                Ok(Pixels::GrayAlpha16(Cow::Owned(data)))
             } else {
-                Ok(PngPixels::Gray16(Cow::Owned(samples)))
+                Ok(Pixels::Gray16(Cow::Owned(samples)))
             }
         }
         (CT_RGB, 8) => {
@@ -563,9 +563,9 @@ fn convert_to_pixels(
                     };
                     data.extend_from_slice(&[r, g, b, alpha]);
                 }
-                Ok(PngPixels::Rgba8(Cow::Owned(data)))
+                Ok(Pixels::Rgba8(Cow::Owned(data)))
             } else {
-                Ok(PngPixels::Rgb8(Cow::Owned(raw.to_vec())))
+                Ok(Pixels::Rgb8(Cow::Owned(raw.to_vec())))
             }
         }
         (CT_RGB, 16) => {
@@ -591,22 +591,22 @@ fn convert_to_pixels(
                     };
                     data.extend_from_slice(&[r, g, b, alpha]);
                 }
-                Ok(PngPixels::Rgba16(Cow::Owned(data)))
+                Ok(Pixels::Rgba16(Cow::Owned(data)))
             } else {
-                Ok(PngPixels::Rgb16(Cow::Owned(samples)))
+                Ok(Pixels::Rgb16(Cow::Owned(samples)))
             }
         }
         (CT_INDEXED, 1 | 2 | 4 | 8) => convert_indexed_to_pixels(header, width, raw, ancillary),
-        (CT_GRAY_ALPHA, 8) => Ok(PngPixels::GrayAlpha8(Cow::Owned(raw.to_vec()))),
-        (CT_GRAY_ALPHA, 16) => Ok(PngPixels::GrayAlpha16(Cow::Owned(
+        (CT_GRAY_ALPHA, 8) => Ok(Pixels::GrayAlpha8(Cow::Owned(raw.to_vec()))),
+        (CT_GRAY_ALPHA, 16) => Ok(Pixels::GrayAlpha16(Cow::Owned(
             raw.as_chunks::<2>()
                 .0
                 .iter()
                 .map(|chunk| u16::from_be_bytes(*chunk))
                 .collect(),
         ))),
-        (CT_RGBA, 8) => Ok(PngPixels::Rgba8(Cow::Owned(raw.to_vec()))),
-        (CT_RGBA, 16) => Ok(PngPixels::Rgba16(Cow::Owned(
+        (CT_RGBA, 8) => Ok(Pixels::Rgba8(Cow::Owned(raw.to_vec()))),
+        (CT_RGBA, 16) => Ok(Pixels::Rgba16(Cow::Owned(
             raw.as_chunks::<2>()
                 .0
                 .iter()
@@ -623,7 +623,7 @@ fn convert_grayscale_low_bit_to_pixels(
     raw: &[u8],
     ancillary: &AncillaryChunks,
     bit_depth: u8,
-) -> Result<PngPixels<'static>> {
+) -> Result<Pixels<'static>> {
     let transparent = match ancillary.transparency {
         Some(Transparency::Grayscale(value)) => Some(value),
         _ => None,
@@ -644,11 +644,11 @@ fn convert_grayscale_low_bit_to_pixels(
             };
             data.extend_from_slice(&[gray, alpha]);
         }
-        Ok(PngPixels::GrayAlpha8(Cow::Owned(data)))
+        Ok(Pixels::GrayAlpha8(Cow::Owned(data)))
     } else {
-        Ok(PngPixels::Gray {
-            bit_depth: PngBitDepth::from_u8(bit_depth)
-                .expect("bug: validated grayscale bit depth must map to PngBitDepth"),
+        Ok(Pixels::Gray {
+            bit_depth: BitDepth::from_u8(bit_depth)
+                .expect("bug: validated grayscale bit depth must map to BitDepth"),
             samples: Cow::Owned(unpacked),
         })
     }
@@ -659,7 +659,7 @@ fn convert_indexed_to_pixels(
     width: u32,
     raw: &[u8],
     ancillary: &AncillaryChunks,
-) -> Result<PngPixels<'static>> {
+) -> Result<Pixels<'static>> {
     let palette = ancillary
         .palette
         .as_ref()
@@ -673,9 +673,9 @@ fn convert_indexed_to_pixels(
     for row in raw.chunks_exact(row_stride) {
         unpacked.extend(unpack_samples(row, width as usize, header.bit_depth));
     }
-    Ok(PngPixels::Indexed {
-        bit_depth: PngBitDepth::from_u8(header.bit_depth)
-            .expect("bug: validated indexed bit depth must map to PngBitDepth"),
+    Ok(Pixels::Indexed {
+        bit_depth: BitDepth::from_u8(header.bit_depth)
+            .expect("bug: validated indexed bit depth must map to BitDepth"),
         indices: Cow::Owned(unpacked),
         palette: Cow::Owned(flatten_palette(palette)),
         trns: trns.map(Cow::Owned),
@@ -850,7 +850,7 @@ fn pixels_from_rgba16_source(
     header: &PngHeader,
     ancillary: &AncillaryChunks,
     rgba: &[u16],
-) -> PngPixels<'static> {
+) -> Pixels<'static> {
     match (
         header.color_type,
         header.bit_depth,
@@ -863,7 +863,7 @@ fn pixels_from_rgba16_source(
                 .iter()
                 .map(|[gray, _, _, _]| *gray)
                 .collect::<Vec<_>>();
-            PngPixels::Gray16(Cow::Owned(data))
+            Pixels::Gray16(Cow::Owned(data))
         }
         (CT_GRAY, _, true) => {
             if header.bit_depth == 16 {
@@ -873,7 +873,7 @@ fn pixels_from_rgba16_source(
                 for &[gray, _, _, alpha] in pixels {
                     data.extend_from_slice(&[gray, alpha]);
                 }
-                PngPixels::GrayAlpha16(Cow::Owned(data))
+                Pixels::GrayAlpha16(Cow::Owned(data))
             } else {
                 let mut data = Vec::with_capacity(rgba.len() / 2);
                 let (pixels, remainder) = rgba.as_chunks::<4>();
@@ -881,7 +881,7 @@ fn pixels_from_rgba16_source(
                 for &[gray, _, _, alpha] in pixels {
                     data.extend_from_slice(&[downsample_u16(gray), downsample_u16(alpha)]);
                 }
-                PngPixels::GrayAlpha8(Cow::Owned(data))
+                Pixels::GrayAlpha8(Cow::Owned(data))
             }
         }
         (CT_RGB, 16, false) => {
@@ -891,13 +891,13 @@ fn pixels_from_rgba16_source(
                 .iter()
                 .flat_map(|[r, g, b, _]| [*r, *g, *b])
                 .collect::<Vec<_>>();
-            PngPixels::Rgb16(Cow::Owned(data))
+            Pixels::Rgb16(Cow::Owned(data))
         }
         (CT_RGB, _, true) => {
             if header.bit_depth == 16 {
-                PngPixels::Rgba16(Cow::Owned(rgba.to_vec()))
+                Pixels::Rgba16(Cow::Owned(rgba.to_vec()))
             } else {
-                PngPixels::Rgba8(Cow::Owned(
+                Pixels::Rgba8(Cow::Owned(
                     rgba.iter().copied().map(downsample_u16).collect(),
                 ))
             }
@@ -909,7 +909,7 @@ fn pixels_from_rgba16_source(
             for &[gray, _, _, alpha] in pixels {
                 data.extend_from_slice(&[downsample_u16(gray), downsample_u16(alpha)]);
             }
-            PngPixels::GrayAlpha8(Cow::Owned(data))
+            Pixels::GrayAlpha8(Cow::Owned(data))
         }
         (CT_GRAY_ALPHA, 16, _) => {
             let mut data = Vec::with_capacity(rgba.len() / 2);
@@ -918,12 +918,12 @@ fn pixels_from_rgba16_source(
             for &[gray, _, _, alpha] in pixels {
                 data.extend_from_slice(&[gray, alpha]);
             }
-            PngPixels::GrayAlpha16(Cow::Owned(data))
+            Pixels::GrayAlpha16(Cow::Owned(data))
         }
-        (CT_RGBA, 8, _) => PngPixels::Rgba8(Cow::Owned(
+        (CT_RGBA, 8, _) => Pixels::Rgba8(Cow::Owned(
             rgba.iter().copied().map(downsample_u16).collect(),
         )),
-        (CT_RGBA, 16, _) => PngPixels::Rgba16(Cow::Owned(rgba.to_vec())),
+        (CT_RGBA, 16, _) => Pixels::Rgba16(Cow::Owned(rgba.to_vec())),
         _ => {
             let (pixels, remainder) = rgba.as_chunks::<4>();
             debug_assert!(remainder.is_empty());
@@ -938,9 +938,9 @@ fn pixels_from_rgba16_source(
                 8 => data,
                 _ => unreachable!(),
             };
-            PngPixels::Gray {
-                bit_depth: PngBitDepth::from_u8(header.bit_depth)
-                    .expect("bug: validated grayscale bit depth must map to PngBitDepth"),
+            Pixels::Gray {
+                bit_depth: BitDepth::from_u8(header.bit_depth)
+                    .expect("bug: validated grayscale bit depth must map to BitDepth"),
                 samples: Cow::Owned(samples),
             }
         }
@@ -1099,7 +1099,7 @@ fn decode_adam7_to_pixels(
     header: &PngHeader,
     filtered: &[u8],
     ancillary: &AncillaryChunks,
-) -> Result<PngPixels<'static>> {
+) -> Result<Pixels<'static>> {
     let pixel_count = (header.width as usize)
         .checked_mul(header.height as usize)
         .ok_or_else(|| Error::InvalidData("pixel count overflow".into()))?;
@@ -1124,7 +1124,7 @@ fn decode_adam7_to_pixels(
                     header.bit_depth,
                 )?;
                 let pass_samples = match pass_pixels {
-                    PngPixels::Gray { samples, .. } => samples.into_owned(),
+                    Pixels::Gray { samples, .. } => samples.into_owned(),
                     _ => unreachable!(),
                 };
                 scatter_scalar_u8(
@@ -1137,9 +1137,9 @@ fn decode_adam7_to_pixels(
                 );
             }
             finish_adam7_offset(filtered, offset)?;
-            Ok(PngPixels::Gray {
-                bit_depth: PngBitDepth::from_u8(header.bit_depth)
-                    .expect("bug: validated grayscale bit depth must map to PngBitDepth"),
+            Ok(Pixels::Gray {
+                bit_depth: BitDepth::from_u8(header.bit_depth)
+                    .expect("bug: validated grayscale bit depth must map to BitDepth"),
                 samples: Cow::Owned(samples),
             })
         }
@@ -1152,7 +1152,7 @@ fn decode_adam7_to_pixels(
                 let pass_pixels =
                     convert_indexed_to_pixels(header, pass_width, &pass_raw, ancillary)?;
                 let pass_indices = match pass_pixels {
-                    PngPixels::Indexed { indices, .. } => indices.into_owned(),
+                    Pixels::Indexed { indices, .. } => indices.into_owned(),
                     _ => unreachable!(),
                 };
                 scatter_scalar_u8(
@@ -1175,9 +1175,9 @@ fn decode_adam7_to_pixels(
                 Some(Transparency::Palette(alpha)) => Some(Cow::Owned(alpha.clone())),
                 _ => None,
             };
-            Ok(PngPixels::Indexed {
-                bit_depth: PngBitDepth::from_u8(header.bit_depth)
-                    .expect("bug: validated indexed bit depth must map to PngBitDepth"),
+            Ok(Pixels::Indexed {
+                bit_depth: BitDepth::from_u8(header.bit_depth)
+                    .expect("bug: validated indexed bit depth must map to BitDepth"),
                 indices: Cow::Owned(indices),
                 palette: Cow::Owned(flat_palette),
                 trns,
@@ -1187,25 +1187,25 @@ fn decode_adam7_to_pixels(
         (CT_GRAY, 8, false) => {
             let data = adam7_scatter_raw_bytes(header, filtered, &mut offset, 1)?;
             finish_adam7_offset(filtered, offset)?;
-            Ok(PngPixels::Gray {
-                bit_depth: PngBitDepth::Eight,
+            Ok(Pixels::Gray {
+                bit_depth: BitDepth::Eight,
                 samples: Cow::Owned(data),
             })
         }
         (CT_GRAY_ALPHA, 8, _) => {
             let data = adam7_scatter_raw_bytes(header, filtered, &mut offset, 2)?;
             finish_adam7_offset(filtered, offset)?;
-            Ok(PngPixels::GrayAlpha8(Cow::Owned(data)))
+            Ok(Pixels::GrayAlpha8(Cow::Owned(data)))
         }
         (CT_RGB, 8, false) => {
             let data = adam7_scatter_raw_bytes(header, filtered, &mut offset, 3)?;
             finish_adam7_offset(filtered, offset)?;
-            Ok(PngPixels::Rgb8(Cow::Owned(data)))
+            Ok(Pixels::Rgb8(Cow::Owned(data)))
         }
         (CT_RGBA, 8, _) => {
             let data = adam7_scatter_raw_bytes(header, filtered, &mut offset, 4)?;
             finish_adam7_offset(filtered, offset)?;
-            Ok(PngPixels::Rgba8(Cow::Owned(data)))
+            Ok(Pixels::Rgba8(Cow::Owned(data)))
         }
         _ => {
             let mut rgba = vec![0; expected_rgba16_len(header)?];

@@ -1,7 +1,7 @@
 use alloc::borrow::Cow;
 use core::error::Error as CoreError;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     Unsupported(Cow<'static, str>),
     InvalidData(Cow<'static, str>),
@@ -26,7 +26,7 @@ impl CoreError for Error {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PngBitDepth {
+pub enum BitDepth {
     One,
     Two,
     Four,
@@ -34,7 +34,7 @@ pub enum PngBitDepth {
     Sixteen,
 }
 
-impl PngBitDepth {
+impl BitDepth {
     pub(crate) fn from_u8(value: u8) -> Option<Self> {
         match value {
             1 => Some(Self::One),
@@ -46,7 +46,7 @@ impl PngBitDepth {
         }
     }
 
-    pub(crate) fn as_u8(self) -> u8 {
+    pub fn as_u8(self) -> u8 {
         match self {
             Self::One => 1,
             Self::Two => 2,
@@ -65,7 +65,7 @@ impl PngBitDepth {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PngColorMode {
+pub enum ColorMode {
     Grayscale,
     GrayscaleAlpha,
     Rgb,
@@ -73,7 +73,7 @@ pub enum PngColorMode {
     Indexed,
 }
 
-impl PngColorMode {
+impl ColorMode {
     pub(crate) fn from_color_type(color_type: u8) -> Self {
         match color_type {
             0 => Self::Grayscale,
@@ -94,45 +94,17 @@ impl PngColorMode {
             Self::Rgba => 6,
         }
     }
-}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PngEncoding {
-    pub color_mode: PngColorMode,
-    pub bit_depth: PngBitDepth,
-    pub interlaced: bool,
-}
+    pub fn has_alpha(&self) -> bool {
+        matches!(self, Self::GrayscaleAlpha | Self::Rgba)
+    }
 
-impl Default for PngEncoding {
-    fn default() -> Self {
-        Self {
-            color_mode: PngColorMode::Rgba,
-            bit_depth: PngBitDepth::Eight,
-            interlaced: false,
+    pub fn channels(&self) -> u8 {
+        match self {
+            Self::Grayscale | Self::Indexed => 1,
+            Self::GrayscaleAlpha => 2,
+            Self::Rgb => 3,
+            Self::Rgba => 4,
         }
     }
-}
-
-/// Basic PNG information read from the PNG signature and `IHDR` chunk.
-///
-/// This type is intended for cheap preflight checks such as rejecting images
-/// whose dimensions are too large for the caller's policy. It does not perform
-/// full PNG validation and does not inspect later chunks such as `PLTE`, `tRNS`
-/// or `IDAT`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PngInfo {
-    pub width: u32,
-    pub height: u32,
-    pub bit_depth: PngBitDepth,
-    pub color_mode: PngColorMode,
-    pub interlaced: bool,
-}
-
-/// PNG image with explicit dimensions, pixel storage and PNG output settings.
-#[derive(Debug, Clone)]
-pub struct PngImage<'a> {
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) pixels: crate::png_pixels::PngPixels<'a>,
-    pub(crate) encoding: PngEncoding,
 }

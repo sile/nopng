@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use nopng::{PngBitDepth, PngColorMode, PngEncoding, PngImage, PngPixels};
+use nopng::{BitDepth, ColorMode, ImageSpec, Pixels, encode_image};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a 32x32 RGBA image (4 bytes per pixel)
@@ -17,20 +17,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         data.push(255); // Alpha = 255 (fully opaque)
     }
 
-    // Create the PNG image
-    let png_image = PngImage::new(
+    // Create the image spec and encode
+    let spec = ImageSpec {
         width,
         height,
-        PngPixels::Rgba8(data.into()),
-        PngEncoding {
-            color_mode: PngColorMode::Rgba,
-            bit_depth: PngBitDepth::Eight,
-            interlaced: false,
-        },
-    )?;
+        color_mode: ColorMode::Rgba,
+        bit_depth: BitDepth::Eight,
+        interlaced: false,
+    };
+    let pixels = Pixels::Rgba8(data.into());
+    let bytes = encode_image(&spec, &pixels)?;
 
     // Write the PNG to stdout
-    let bytes = png_image.to_bytes()?;
     let stdout = std::io::stdout();
     let mut stdout = stdout.lock();
     stdout.write_all(&bytes)?;

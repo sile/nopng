@@ -2,8 +2,9 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use crate::chunk::IhdrChunk;
-use crate::png_pixels::PngPixels;
-use crate::png_types::{Error, PngBitDepth, PngColorMode, PngEncoding, Result};
+use crate::png::ImageSpec;
+use crate::png_pixels::Pixels;
+use crate::png_types::{BitDepth, ColorMode, Error, Result};
 
 use crate::png::{ADAM7_PASSES, adam7_axis_size};
 
@@ -21,18 +22,18 @@ impl EncodedImage {
     pub(crate) fn from_pixels(
         width: u32,
         height: u32,
-        pixels: &PngPixels<'_>,
-        encoding: PngEncoding,
+        pixels: &Pixels<'_>,
+        encoding: &ImageSpec,
     ) -> Result<Self> {
         // Fast path: Indexed pixels -> Indexed encoding with matching bit depth.
-        if encoding.color_mode == PngColorMode::Indexed
-            && pixels.color_mode() == PngColorMode::Indexed
+        if encoding.color_mode == ColorMode::Indexed
+            && pixels.color_mode() == ColorMode::Indexed
             && pixels.bit_depth() == encoding.bit_depth
             && let Some(result) = Self::from_indexed_direct(width, height, pixels, encoding)
         {
             return result;
         }
-        if encoding.bit_depth == PngBitDepth::Sixteen {
+        if encoding.bit_depth == BitDepth::Sixteen {
             let rgba16 = pixels.to_rgba16_vec();
             return Self::from_rgba16(width, height, &rgba16, encoding);
         }
@@ -44,10 +45,10 @@ impl EncodedImage {
     fn from_indexed_direct(
         width: u32,
         height: u32,
-        pixels: &PngPixels<'_>,
-        encoding: PngEncoding,
+        pixels: &Pixels<'_>,
+        encoding: &ImageSpec,
     ) -> Option<Result<Self>> {
-        let PngPixels::Indexed {
+        let Pixels::Indexed {
             indices,
             palette: flat_palette,
             trns,
@@ -100,7 +101,7 @@ impl EncodedImage {
         width: u32,
         height: u32,
         rgba: &[u8],
-        encoding: PngEncoding,
+        encoding: &ImageSpec,
     ) -> Result<Self> {
         let (pixels, remainder) = rgba.as_chunks::<4>();
         debug_assert!(remainder.is_empty());
@@ -126,7 +127,7 @@ impl EncodedImage {
         width: u32,
         height: u32,
         rgba: &[u16],
-        encoding: PngEncoding,
+        encoding: &ImageSpec,
     ) -> Result<Self> {
         let (pixels, remainder) = rgba.as_chunks::<4>();
         debug_assert!(remainder.is_empty());
@@ -207,10 +208,10 @@ enum EncodedPixelKind16 {
 }
 
 impl EncodingTarget {
-    fn analyze(pixels: &[[u8; 4]], encoding: PngEncoding) -> Result<Self> {
+    fn analyze(pixels: &[[u8; 4]], encoding: &ImageSpec) -> Result<Self> {
         let effective_bit_depth = encoding.bit_depth.effective_for_rgba8();
         match encoding.color_mode {
-            PngColorMode::Grayscale => {
+            ColorMode::Grayscale => {
                 if !pixels_are_opaque_grayscale(pixels) {
                     return Err(Error::Unsupported(
                         "grayscale encoding requires opaque grayscale pixels".into(),
@@ -230,16 +231,16 @@ impl EncodingTarget {
                     color_map: None,
                 })
             }
-            PngColorMode::GrayscaleAlpha => {
+            ColorMode::GrayscaleAlpha => {
                 if !pixels_are_grayscale(pixels) {
                     return Err(Error::Unsupported(
                         "grayscale+alpha encoding requires grayscale pixels".into(),
                     ));
                 }
                 validate_exact_bit_depth(
-                    PngColorMode::GrayscaleAlpha,
+                    ColorMode::GrayscaleAlpha,
                     effective_bit_depth,
-                    &[PngBitDepth::Eight],
+                    &[BitDepth::Eight],
                 )?;
                 Ok(Self {
                     bit_depth: 8,
@@ -250,17 +251,13 @@ impl EncodingTarget {
                     color_map: None,
                 })
             }
-            PngColorMode::Rgb => {
+            ColorMode::Rgb => {
                 if !pixels_are_opaque(pixels) {
                     return Err(Error::Unsupported(
                         "rgb encoding requires opaque pixels".into(),
                     ));
                 }
-                validate_exact_bit_depth(
-                    PngColorMode::Rgb,
-                    effective_bit_depth,
-                    &[PngBitDepth::Eight],
-                )?;
+                validate_exact_bit_depth(ColorMode::Rgb, effective_bit_depth, &[BitDepth::Eight])?;
                 Ok(Self {
                     bit_depth: 8,
                     color_type: IhdrChunk::COLOR_TYPE_RGB,
@@ -270,12 +267,8 @@ impl EncodingTarget {
                     color_map: None,
                 })
             }
-            PngColorMode::Rgba => {
-                validate_exact_bit_depth(
-                    PngColorMode::Rgba,
-                    effective_bit_depth,
-                    &[PngBitDepth::Eight],
-                )?;
+            ColorMode::Rgba => {
+                validate_exact_bit_depth(ColorMode::Rgba, effective_bit_depth, &[BitDepth::Eight])?;
                 Ok(Self {
                     bit_depth: 8,
                     color_type: IhdrChunk::COLOR_TYPE_RGBA,
@@ -285,7 +278,7 @@ impl EncodingTarget {
                     color_map: None,
                 })
             }
-            PngColorMode::Indexed => {
+            ColorMode::Indexed => {
                 let Some(indexed) = analyze_palette(pixels) else {
                     return Err(Error::Unsupported(
                         "indexed encoding requires at most 256 distinct colors".into(),
@@ -306,14 +299,14 @@ impl EncodingTarget {
 }
 
 impl EncodingTarget16 {
-    fn analyze(pixels: &[[u16; 4]], encoding: PngEncoding) -> Result<Self> {
+    fn analyze(pixels: &[[u16; 4]], encoding: &ImageSpec) -> Result<Self> {
         validate_exact_bit_depth(
             encoding.color_mode,
             encoding.bit_depth,
-            &[PngBitDepth::Sixteen],
+            &[BitDepth::Sixteen],
         )?;
         match encoding.color_mode {
-            PngColorMode::Grayscale => {
+            ColorMode::Grayscale => {
                 if !pixels_are_opaque_grayscale16(pixels) {
                     return Err(Error::Unsupported(
                         "grayscale encoding requires opaque grayscale pixels".into(),
@@ -324,7 +317,7 @@ impl EncodingTarget16 {
                     pixel_kind: EncodedPixelKind16::Grayscale16,
                 })
             }
-            PngColorMode::GrayscaleAlpha => {
+            ColorMode::GrayscaleAlpha => {
                 if !pixels_are_grayscale16(pixels) {
                     return Err(Error::Unsupported(
                         "grayscale+alpha encoding requires grayscale pixels".into(),
@@ -335,7 +328,7 @@ impl EncodingTarget16 {
                     pixel_kind: EncodedPixelKind16::GrayscaleAlpha16,
                 })
             }
-            PngColorMode::Rgb => {
+            ColorMode::Rgb => {
                 if !pixels_are_opaque16(pixels) {
                     return Err(Error::Unsupported(
                         "rgb encoding requires opaque pixels".into(),
@@ -346,11 +339,11 @@ impl EncodingTarget16 {
                     pixel_kind: EncodedPixelKind16::Rgb16,
                 })
             }
-            PngColorMode::Rgba => Ok(Self {
+            ColorMode::Rgba => Ok(Self {
                 color_type: IhdrChunk::COLOR_TYPE_RGBA,
                 pixel_kind: EncodedPixelKind16::Rgba16,
             }),
-            PngColorMode::Indexed => Err(Error::Unsupported(
+            ColorMode::Indexed => Err(Error::Unsupported(
                 "16-bit indexed encoding is not supported".into(),
             )),
         }
@@ -818,9 +811,9 @@ fn pixels_are_opaque_grayscale16(pixels: &[[u16; 4]]) -> bool {
 }
 
 fn validate_exact_bit_depth(
-    color_mode: PngColorMode,
-    bit_depth: PngBitDepth,
-    allowed: &[PngBitDepth],
+    color_mode: ColorMode,
+    bit_depth: BitDepth,
+    allowed: &[BitDepth],
 ) -> Result<()> {
     if allowed.contains(&bit_depth) {
         Ok(())
@@ -835,15 +828,15 @@ fn validate_exact_bit_depth(
     }
 }
 
-fn validate_grayscale_bit_depth(pixels: &[[u8; 4]], bit_depth: PngBitDepth) -> Result<()> {
+fn validate_grayscale_bit_depth(pixels: &[[u8; 4]], bit_depth: BitDepth) -> Result<()> {
     validate_exact_bit_depth(
-        PngColorMode::Grayscale,
+        ColorMode::Grayscale,
         bit_depth,
         &[
-            PngBitDepth::One,
-            PngBitDepth::Two,
-            PngBitDepth::Four,
-            PngBitDepth::Eight,
+            BitDepth::One,
+            BitDepth::Two,
+            BitDepth::Four,
+            BitDepth::Eight,
         ],
     )?;
     if grayscale_pixels_fit_bit_depth(pixels, bit_depth) {
@@ -859,35 +852,35 @@ fn validate_grayscale_bit_depth(pixels: &[[u8; 4]], bit_depth: PngBitDepth) -> R
     }
 }
 
-fn grayscale_pixels_fit_bit_depth(pixels: &[[u8; 4]], bit_depth: PngBitDepth) -> bool {
+fn grayscale_pixels_fit_bit_depth(pixels: &[[u8; 4]], bit_depth: BitDepth) -> bool {
     match bit_depth {
-        PngBitDepth::One => pixels.iter().all(|pixel| matches!(pixel[0], 0 | 255)),
-        PngBitDepth::Two => pixels
+        BitDepth::One => pixels.iter().all(|pixel| matches!(pixel[0], 0 | 255)),
+        BitDepth::Two => pixels
             .iter()
             .all(|pixel| matches!(pixel[0], 0 | 85 | 170 | 255)),
-        PngBitDepth::Four => pixels.iter().all(|pixel| pixel[0] % 17 == 0),
-        PngBitDepth::Eight => true,
-        PngBitDepth::Sixteen => false,
+        BitDepth::Four => pixels.iter().all(|pixel| pixel[0] % 17 == 0),
+        BitDepth::Eight => true,
+        BitDepth::Sixteen => false,
     }
 }
 
-fn validate_indexed_bit_depth(size: usize, bit_depth: PngBitDepth) -> Result<()> {
+fn validate_indexed_bit_depth(size: usize, bit_depth: BitDepth) -> Result<()> {
     validate_exact_bit_depth(
-        PngColorMode::Indexed,
+        ColorMode::Indexed,
         bit_depth,
         &[
-            PngBitDepth::One,
-            PngBitDepth::Two,
-            PngBitDepth::Four,
-            PngBitDepth::Eight,
+            BitDepth::One,
+            BitDepth::Two,
+            BitDepth::Four,
+            BitDepth::Eight,
         ],
     )?;
     let capacity = match bit_depth {
-        PngBitDepth::One => 2,
-        PngBitDepth::Two => 4,
-        PngBitDepth::Four => 16,
-        PngBitDepth::Eight => 256,
-        PngBitDepth::Sixteen => unreachable!(),
+        BitDepth::One => 2,
+        BitDepth::Two => 4,
+        BitDepth::Four => 16,
+        BitDepth::Eight => 256,
+        BitDepth::Sixteen => unreachable!(),
     };
     if size <= capacity {
         Ok(())

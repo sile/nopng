@@ -3,10 +3,8 @@ use alloc::vec::Vec;
 use crate::chunk::{IdatChunk, IendChunk, IhdrChunk, PlteChunk, TrnsChunk};
 use crate::png_pixels::validate_pixels;
 
-pub use crate::png_pixels::PngPixels;
-pub use crate::png_types::{
-    Error, PngBitDepth, PngColorMode, PngEncoding, PngImage, PngInfo, Result,
-};
+pub use crate::png_pixels::Pixels;
+pub use crate::png_types::{BitDepth, ColorMode, Error, Result};
 
 pub(crate) const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 pub(crate) const ADAM7_PASSES: [Adam7Pass; 7] = [
@@ -54,10 +52,56 @@ pub(crate) const ADAM7_PASSES: [Adam7Pass; 7] = [
     },
 ];
 
-impl PngInfo {
+/// Image metadata describing dimensions, bit depth, color mode and interlacing.
+///
+/// Use [`ImageSpec::from_bytes`] for a cheap preflight check that only reads
+/// the IHDR chunk, or [`ImageSpec::from_pixels`] to derive a spec from pixel
+/// data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImageSpec {
+    pub width: u32,
+    pub height: u32,
+    pub bit_depth: BitDepth,
+    pub color_mode: ColorMode,
+    pub interlaced: bool,
+}
+
+impl ImageSpec {
+    /// Reads basic PNG information from the PNG signature and `IHDR` chunk.
+    ///
+    /// This is intended for cheap preflight checks such as rejecting images
+    /// whose dimensions are too large. It does not perform full PNG validation
+    /// and does not inspect later chunks such as `PLTE`, `tRNS` or `IDAT`.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         let header = crate::png_decode::parse_png_header(bytes)?;
         Ok(Self::from_header(&header))
+    }
+
+    /// Derives an `ImageSpec` from pixel data and dimensions.
+    ///
+    /// The `bit_depth` and `color_mode` are inferred from the pixel variant.
+    /// Interlacing defaults to `false`.
+    pub fn from_pixels(width: u32, height: u32, pixels: &Pixels<'_>) -> Result<Self> {
+        if width == 0 || height == 0 {
+            return Err(Error::InvalidData(
+                "image dimensions must be non-zero".into(),
+            ));
+        }
+        let expected = (width as usize)
+            .checked_mul(height as usize)
+            .ok_or_else(|| Error::InvalidData("pixel count overflow".into()))?;
+        if pixels.pixel_count() != expected {
+            return Err(Error::InvalidData(
+                "image size does not match pixel buffer length".into(),
+            ));
+        }
+        Ok(Self {
+            width,
+            height,
+            color_mode: pixels.color_mode(),
+            bit_depth: pixels.bit_depth(),
+            interlaced: false,
+        })
     }
 
     pub fn pixel_count(&self) -> Option<usize> {
@@ -83,153 +127,107 @@ impl PngInfo {
         Self {
             width: header.width,
             height: header.height,
-            bit_depth: PngBitDepth::from_u8(header.bit_depth)
-                .expect("bug: validated bit depth must map to PngBitDepth"),
-            color_mode: PngColorMode::from_color_type(header.color_type),
+            bit_depth: BitDepth::from_u8(header.bit_depth)
+                .expect("bug: validated bit depth must map to BitDepth"),
+            color_mode: ColorMode::from_color_type(header.color_type),
             interlaced: header.interlace_method == 1,
         }
     }
 }
 
-impl PngEncoding {
-    pub fn for_pixels(pixels: &PngPixels<'_>) -> Self {
-        Self {
-            color_mode: pixels.color_mode(),
-            bit_depth: pixels.bit_depth(),
-            interlaced: false,
-        }
-    }
+/// Decodes PNG bytes into an [`ImageSpec`] and [`Pixels`] variant closest to
+/// the source PNG.
+///
+/// Low-bit grayscale and indexed images are returned as unpacked samples or
+/// indices. `tRNS` is reflected in the returned pixels, so grayscale or
+/// truecolor images with transparency become `GrayAlpha*` or `Rgba*`.
+///
+/// This function validates the expected decode sizes implied by `IHDR`, such
+/// as filtered scanline sizes and final decoded output size, and rejects
+/// streams whose decoded layout is inconsistent with those values.
+///
+/// This function does not impose a caller-configurable size policy. Call
+/// [`ImageSpec::from_bytes`] first if you want to reject images based on
+/// width, height, pixel count, or expected decoded RGBA8 size before doing
+/// a full decode.
+pub fn decode_image(bytes: &[u8]) -> Result<(ImageSpec, Pixels<'static>)> {
+    let (header, pixels) = crate::png_decode::decode_png(bytes)?;
+    let spec = ImageSpec {
+        width: header.width,
+        height: header.height,
+        bit_depth: pixels.bit_depth(),
+        color_mode: pixels.color_mode(),
+        interlaced: header.interlace_method == 1,
+    };
+    validate_spec_and_pixels(&spec, &pixels)?;
+    Ok((spec, pixels))
 }
 
-impl<'a> PngImage<'a> {
-    pub fn new(
-        width: u32,
-        height: u32,
-        pixels: PngPixels<'a>,
-        encoding: PngEncoding,
-    ) -> Result<Self> {
-        if width == 0 || height == 0 {
-            return Err(Error::InvalidData(
-                "image dimensions must be non-zero".into(),
-            ));
-        }
-        let expected = (width as usize)
-            .checked_mul(height as usize)
-            .ok_or_else(|| Error::InvalidData("pixel count overflow".into()))?;
-        if pixels.pixel_count() != expected {
-            return Err(Error::InvalidData(
-                "image size does not match pixel buffer length".into(),
-            ));
-        }
-        validate_pixels(&pixels)?;
-        validate_encoding_compatibility(&pixels, &encoding)?;
-        Ok(Self {
-            width,
-            height,
-            pixels,
-            encoding,
-        })
+/// Encodes an image described by `spec` and `pixels` into PNG bytes.
+///
+/// The `spec` determines the output format (color mode, bit depth, interlacing).
+/// Dimensions in `spec` must match the pixel count in `pixels`.
+pub fn encode_image(spec: &ImageSpec, pixels: &Pixels<'_>) -> Result<Vec<u8>> {
+    validate_spec_and_pixels(spec, pixels)?;
+    validate_pixels(pixels)?;
+    validate_encoding_compatibility(pixels, spec)?;
+
+    let encoded =
+        crate::png_encode::EncodedImage::from_pixels(spec.width, spec.height, pixels, spec)?;
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&PNG_SIGNATURE);
+
+    IhdrChunk {
+        width: spec.width,
+        height: spec.height,
+        bit_depth: encoded.bit_depth,
+        color_type: encoded.color_type,
+        interlace_method: encoded.interlace_method,
     }
-
-    /// Decodes PNG bytes into a [`PngPixels`] variant that is closest to the source PNG.
-    ///
-    /// Low-bit grayscale and indexed images are returned as unpacked samples or
-    /// indices. `tRNS` is reflected in the returned pixels, so grayscale or
-    /// truecolor images with transparency become `GrayAlpha*` or `Rgba*`.
-    ///
-    /// This method validates the expected decode sizes implied by `IHDR`, such
-    /// as filtered scanline sizes and final decoded output size, and rejects
-    /// streams whose decoded layout is inconsistent with those values.
-    ///
-    /// This method does not impose a caller-configurable size policy. Call
-    /// [`PngInfo::from_bytes`] first if you want to reject images based on
-    /// width, height, pixel count, or expected decoded RGBA8 size before doing
-    /// a full decode.
-    pub fn from_bytes(bytes: &[u8]) -> Result<PngImage<'static>> {
-        let (header, pixels) = crate::png_decode::decode_png(bytes)?;
-        let encoding = PngEncoding::for_pixels(&pixels);
-        PngImage::<'static>::new(header.width, header.height, pixels, encoding)
+    .append_to(&mut bytes);
+    if let Some(palette) = encoded.palette.as_deref() {
+        PlteChunk { palette }.append_to(&mut bytes);
     }
-
-    pub fn width(&self) -> u32 {
-        self.width
+    if let Some(trns) = encoded.trns.as_deref() {
+        TrnsChunk { data: trns }.append_to(&mut bytes);
     }
-
-    pub fn height(&self) -> u32 {
-        self.height
+    IdatChunk {
+        filtered_data: &encoded.filtered_data,
     }
+    .append_to(&mut bytes)?;
+    IendChunk.append_to(&mut bytes);
 
-    pub fn pixels(&self) -> &PngPixels<'a> {
-        &self.pixels
-    }
-
-    pub fn pixels_mut(&mut self) -> &mut PngPixels<'a> {
-        &mut self.pixels
-    }
-
-    pub fn into_pixels(self) -> PngPixels<'a> {
-        self.pixels
-    }
-
-    pub fn encoding(&self) -> &PngEncoding {
-        &self.encoding
-    }
-
-    pub fn encoding_mut(&mut self) -> &mut PngEncoding {
-        &mut self.encoding
-    }
-
-    /// Encodes the image using its current [`PngEncoding`].
-    pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        let encoded = crate::png_encode::EncodedImage::from_pixels(
-            self.width,
-            self.height,
-            &self.pixels,
-            self.encoding,
-        )?;
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&PNG_SIGNATURE);
-
-        IhdrChunk {
-            width: self.width,
-            height: self.height,
-            bit_depth: encoded.bit_depth,
-            color_type: encoded.color_type,
-            interlace_method: encoded.interlace_method,
-        }
-        .append_to(&mut bytes);
-        if let Some(palette) = encoded.palette.as_deref() {
-            PlteChunk { palette }.append_to(&mut bytes);
-        }
-        if let Some(trns) = encoded.trns.as_deref() {
-            TrnsChunk { data: trns }.append_to(&mut bytes);
-        }
-        IdatChunk {
-            filtered_data: &encoded.filtered_data,
-        }
-        .append_to(&mut bytes)?;
-        IendChunk.append_to(&mut bytes);
-
-        Ok(bytes)
-    }
+    Ok(bytes)
 }
 
-fn validate_encoding_compatibility(pixels: &PngPixels<'_>, encoding: &PngEncoding) -> Result<()> {
-    let is_16bit_pixels = matches!(pixels.bit_depth(), PngBitDepth::Sixteen);
-    let is_16bit_encoding = encoding.bit_depth == PngBitDepth::Sixteen;
+fn validate_spec_and_pixels(spec: &ImageSpec, pixels: &Pixels<'_>) -> Result<()> {
+    if spec.width == 0 || spec.height == 0 {
+        return Err(Error::InvalidData(
+            "image dimensions must be non-zero".into(),
+        ));
+    }
+    let expected = (spec.width as usize)
+        .checked_mul(spec.height as usize)
+        .ok_or_else(|| Error::InvalidData("pixel count overflow".into()))?;
+    if pixels.pixel_count() != expected {
+        return Err(Error::InvalidData(
+            "image size does not match pixel buffer length".into(),
+        ));
+    }
+    Ok(())
+}
 
-    // 16-bit pixels require 16-bit encoding and vice versa.
+fn validate_encoding_compatibility(pixels: &Pixels<'_>, spec: &ImageSpec) -> Result<()> {
+    let is_16bit_pixels = matches!(pixels.bit_depth(), BitDepth::Sixteen);
+    let is_16bit_encoding = spec.bit_depth == BitDepth::Sixteen;
+
     if is_16bit_pixels != is_16bit_encoding {
         return Err(Error::Unsupported(
             "16-bit pixels require 16-bit encoding and vice versa".into(),
         ));
     }
 
-    // Indexed encoding with non-8-bit depth requires indexed pixels or <=256 color RGBA pixels.
-    // This is validated at encode time, so no extra check here.
-
-    // 16-bit indexed encoding is not supported.
-    if encoding.color_mode == PngColorMode::Indexed && is_16bit_encoding {
+    if spec.color_mode == ColorMode::Indexed && is_16bit_encoding {
         return Err(Error::Unsupported(
             "16-bit indexed encoding is not supported".into(),
         ));
@@ -259,78 +257,71 @@ mod tests {
     use alloc::{vec, vec::Vec};
 
     use super::{
-        Error, IhdrChunk, PNG_SIGNATURE, PngBitDepth, PngColorMode, PngEncoding, PngImage, PngInfo,
-        PngPixels,
+        BitDepth, ColorMode, Error, IhdrChunk, ImageSpec, PNG_SIGNATURE, Pixels, decode_image,
+        encode_image,
     };
 
     #[test]
     fn roundtrip_rgba_writer_and_reader() {
-        let pixels = PngPixels::Rgba8(vec![255, 0, 0, 255, 0, 255, 0, 128].into());
-        let image = PngImage::new(2, 1, pixels.clone(), PngEncoding::for_pixels(&pixels))
-            .expect("infallible");
-        let bytes = image.to_bytes().expect("infallible");
-        let decoded = PngImage::from_bytes(&bytes).expect("infallible");
+        let pixels = Pixels::Rgba8(vec![255, 0, 0, 255, 0, 255, 0, 128].into());
+        let spec = ImageSpec::from_pixels(2, 1, &pixels).expect("infallible");
+        let bytes = encode_image(&spec, &pixels).expect("infallible");
+        let (_, decoded_pixels) = decode_image(&bytes).expect("infallible");
         assert_eq!(
-            decoded
-                .pixels()
+            decoded_pixels
                 .to_rgba8()
-                .as_u8_slice()
+                .as_u8_storage()
                 .expect("infallible"),
-            pixels.to_rgba8().as_u8_slice().expect("infallible")
+            pixels.to_rgba8().as_u8_storage().expect("infallible")
         );
     }
 
     #[test]
     fn write_to_uses_explicit_indexed_encoding() {
-        let pixels = PngPixels::Rgba8(
+        let pixels = Pixels::Rgba8(
             vec![
                 255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 255, 255, 255, 0, 64,
             ]
             .into(),
         );
-        let mut image = PngImage::new(4, 1, pixels.clone(), PngEncoding::for_pixels(&pixels))
-            .expect("infallible");
-        *image.encoding_mut() = PngEncoding {
-            color_mode: PngColorMode::Indexed,
-            bit_depth: PngBitDepth::Two,
+        let spec = ImageSpec {
+            width: 4,
+            height: 1,
+            color_mode: ColorMode::Indexed,
+            bit_depth: BitDepth::Two,
             interlaced: false,
         };
-        let bytes = image.to_bytes().expect("infallible");
+        let bytes = encode_image(&spec, &pixels).expect("infallible");
         let ihdr = read_ihdr(&bytes);
         assert_eq!(ihdr.bit_depth, 2);
         assert_eq!(ihdr.color_type, IhdrChunk::COLOR_TYPE_INDEXED);
-        let decoded = PngImage::from_bytes(&bytes).expect("infallible");
+        let (_, decoded_pixels) = decode_image(&bytes).expect("infallible");
         assert_eq!(
-            decoded
-                .pixels()
+            decoded_pixels
                 .to_rgba8()
-                .as_u8_slice()
+                .as_u8_storage()
                 .expect("infallible"),
-            pixels.to_rgba8().as_u8_slice().expect("infallible")
+            pixels.to_rgba8().as_u8_storage().expect("infallible")
         );
     }
 
     #[test]
     fn borrowed_rgb8_can_be_encoded() {
         let data = [255u8, 0, 0, 0, 255, 0];
-        let image = PngImage::new(
-            2,
-            1,
-            PngPixels::Rgb8((&data[..]).into()),
-            PngEncoding {
-                color_mode: PngColorMode::Rgb,
-                bit_depth: PngBitDepth::Eight,
-                interlaced: false,
-            },
-        )
-        .expect("infallible");
-        let bytes = image.to_bytes().expect("infallible");
-        let decoded = PngImage::from_bytes(&bytes).expect("infallible");
+        let pixels = Pixels::Rgb8((&data[..]).into());
+        let spec = ImageSpec {
+            width: 2,
+            height: 1,
+            color_mode: ColorMode::Rgb,
+            bit_depth: BitDepth::Eight,
+            interlaced: false,
+        };
+        let bytes = encode_image(&spec, &pixels).expect("infallible");
+        let (_, decoded_pixels) = decode_image(&bytes).expect("infallible");
         assert_eq!(
-            decoded
-                .pixels()
+            decoded_pixels
                 .to_rgb8()
-                .as_u8_slice()
+                .as_u8_storage()
                 .expect("infallible"),
             &data
         );
@@ -338,17 +329,15 @@ mod tests {
 
     #[test]
     fn new_rejects_pixel_count_mismatch() {
-        let error = PngImage::new(
-            2,
-            1,
-            PngPixels::Rgba8(vec![0, 1, 2, 3].into()),
-            PngEncoding {
-                color_mode: PngColorMode::Rgba,
-                bit_depth: PngBitDepth::Eight,
-                interlaced: false,
-            },
-        )
-        .unwrap_err();
+        let pixels = Pixels::Rgba8(vec![0, 1, 2, 3].into());
+        let spec = ImageSpec {
+            width: 2,
+            height: 1,
+            color_mode: ColorMode::Rgba,
+            bit_depth: BitDepth::Eight,
+            interlaced: false,
+        };
+        let error = encode_image(&spec, &pixels).unwrap_err();
         assert!(
             matches!(error, Error::InvalidData(message) if message.contains("pixel buffer length"))
         );
@@ -356,215 +345,193 @@ mod tests {
 
     #[test]
     fn new_rejects_index_out_of_range() {
-        let error = PngImage::new(
-            2,
-            1,
-            PngPixels::Indexed {
-                bit_depth: PngBitDepth::Two,
-                indices: vec![0, 4].into(),
-                palette: vec![0, 0, 0, 255, 255, 255].into(),
-                trns: None,
-            },
-            PngEncoding {
-                color_mode: PngColorMode::Indexed,
-                bit_depth: PngBitDepth::Two,
-                interlaced: false,
-            },
-        )
-        .unwrap_err();
+        let pixels = Pixels::Indexed {
+            bit_depth: BitDepth::Two,
+            indices: vec![0, 4].into(),
+            palette: vec![0, 0, 0, 255, 255, 255].into(),
+            trns: None,
+        };
+        let spec = ImageSpec {
+            width: 2,
+            height: 1,
+            color_mode: ColorMode::Indexed,
+            bit_depth: BitDepth::Two,
+            interlaced: false,
+        };
+        let error = encode_image(&spec, &pixels).unwrap_err();
         assert!(matches!(error, Error::InvalidData(message) if message.contains("out-of-range")));
     }
 
     #[test]
     fn writing_with_sixteen_bit_encoding_writes_sixteen_bit_png() {
-        let image = PngImage::new(
-            2,
-            1,
-            PngPixels::Rgba16(vec![0u16, 1, 2, 3, 65535, 32768, 16, 255].into()),
-            PngEncoding {
-                color_mode: PngColorMode::Rgba,
-                bit_depth: PngBitDepth::Sixteen,
-                interlaced: false,
-            },
-        )
-        .expect("infallible");
-        let bytes = image.to_bytes().expect("infallible");
+        let pixels = Pixels::Rgba16(vec![0u16, 1, 2, 3, 65535, 32768, 16, 255].into());
+        let spec = ImageSpec {
+            width: 2,
+            height: 1,
+            color_mode: ColorMode::Rgba,
+            bit_depth: BitDepth::Sixteen,
+            interlaced: false,
+        };
+        let bytes = encode_image(&spec, &pixels).expect("infallible");
         let ihdr = read_ihdr(&bytes);
         assert_eq!(ihdr.bit_depth, 16);
         assert_eq!(ihdr.color_type, IhdrChunk::COLOR_TYPE_RGBA);
     }
 
     #[test]
-    fn png_info_rejects_truncated_ihdr() {
-        let error = PngInfo::from_bytes(&PNG_SIGNATURE).expect_err("infallible");
+    fn image_spec_rejects_truncated_ihdr() {
+        let error = ImageSpec::from_bytes(&PNG_SIGNATURE).expect_err("infallible");
         assert!(matches!(error, Error::InvalidData(message) if message.contains("unexpected end")));
     }
 
     #[test]
     fn new_rejects_zero_width() {
-        let error = PngImage::new(
-            0,
-            1,
-            PngPixels::Rgba8(vec![].into()),
-            PngEncoding::default(),
-        )
-        .unwrap_err();
+        let pixels = Pixels::Rgba8(vec![].into());
+        let spec = ImageSpec {
+            width: 0,
+            height: 1,
+            color_mode: ColorMode::Rgba,
+            bit_depth: BitDepth::Eight,
+            interlaced: false,
+        };
+        let error = encode_image(&spec, &pixels).unwrap_err();
         assert!(matches!(error, Error::InvalidData(message) if message.contains("non-zero")));
     }
 
     #[test]
     fn new_rejects_zero_height() {
-        let error = PngImage::new(
-            1,
-            0,
-            PngPixels::Rgba8(vec![].into()),
-            PngEncoding::default(),
-        )
-        .unwrap_err();
+        let pixels = Pixels::Rgba8(vec![].into());
+        let spec = ImageSpec {
+            width: 1,
+            height: 0,
+            color_mode: ColorMode::Rgba,
+            bit_depth: BitDepth::Eight,
+            interlaced: false,
+        };
+        let error = encode_image(&spec, &pixels).unwrap_err();
         assert!(matches!(error, Error::InvalidData(message) if message.contains("non-zero")));
     }
 
     #[test]
     fn roundtrip_1x1_rgba() {
-        let pixels = PngPixels::Rgba8(vec![42, 128, 200, 255].into());
-        let image = PngImage::new(1, 1, pixels.clone(), PngEncoding::for_pixels(&pixels))
-            .expect("infallible");
-        let bytes = image.to_bytes().expect("infallible");
-        let decoded = PngImage::from_bytes(&bytes).expect("infallible");
+        let pixels = Pixels::Rgba8(vec![42, 128, 200, 255].into());
+        let spec = ImageSpec::from_pixels(1, 1, &pixels).expect("infallible");
+        let bytes = encode_image(&spec, &pixels).expect("infallible");
+        let (_, decoded_pixels) = decode_image(&bytes).expect("infallible");
         assert_eq!(
-            decoded
-                .pixels()
+            decoded_pixels
                 .to_rgba8()
-                .as_u8_slice()
+                .as_u8_storage()
                 .expect("infallible"),
-            pixels.to_rgba8().as_u8_slice().expect("infallible")
+            pixels.to_rgba8().as_u8_storage().expect("infallible")
         );
     }
 
     #[test]
     fn roundtrip_grayscale_alpha() {
-        let pixels =
-            PngPixels::GrayAlpha8(vec![0, 255, 128, 64, 255, 128, 50, 200, 200, 100].into());
-        let image = PngImage::new(
-            5,
-            1,
-            pixels.clone(),
-            PngEncoding {
-                color_mode: PngColorMode::GrayscaleAlpha,
-                bit_depth: PngBitDepth::Eight,
-                interlaced: false,
-            },
-        )
-        .expect("infallible");
-        let bytes = image.to_bytes().expect("infallible");
-        let decoded = PngImage::from_bytes(&bytes).expect("infallible");
+        let pixels = Pixels::GrayAlpha8(vec![0, 255, 128, 64, 255, 128, 50, 200, 200, 100].into());
+        let spec = ImageSpec {
+            width: 5,
+            height: 1,
+            color_mode: ColorMode::GrayscaleAlpha,
+            bit_depth: BitDepth::Eight,
+            interlaced: false,
+        };
+        let bytes = encode_image(&spec, &pixels).expect("infallible");
+        let (_, decoded_pixels) = decode_image(&bytes).expect("infallible");
         assert_eq!(
-            decoded
-                .pixels()
+            decoded_pixels
                 .to_rgba8()
-                .as_u8_slice()
+                .as_u8_storage()
                 .expect("infallible"),
-            pixels.to_rgba8().as_u8_slice().expect("infallible")
+            pixels.to_rgba8().as_u8_storage().expect("infallible")
         );
     }
 
     #[test]
     fn roundtrip_indexed_with_alpha() {
-        let pixels = PngPixels::Rgba8(
+        let pixels = Pixels::Rgba8(
             vec![
                 255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 0, 255, 255, 255, 64,
             ]
             .into(),
         );
-        let mut image = PngImage::new(2, 2, pixels.clone(), PngEncoding::for_pixels(&pixels))
-            .expect("infallible");
-        *image.encoding_mut() = PngEncoding {
-            color_mode: PngColorMode::Indexed,
-            bit_depth: PngBitDepth::Eight,
+        let spec = ImageSpec {
+            width: 2,
+            height: 2,
+            color_mode: ColorMode::Indexed,
+            bit_depth: BitDepth::Eight,
             interlaced: false,
         };
-        let bytes = image.to_bytes().expect("infallible");
-        let decoded = PngImage::from_bytes(&bytes).expect("infallible");
+        let bytes = encode_image(&spec, &pixels).expect("infallible");
+        let (_, decoded_pixels) = decode_image(&bytes).expect("infallible");
         assert_eq!(
-            decoded
-                .pixels()
+            decoded_pixels
                 .to_rgba8()
-                .as_u8_slice()
+                .as_u8_storage()
                 .expect("infallible"),
-            pixels.to_rgba8().as_u8_slice().expect("infallible")
+            pixels.to_rgba8().as_u8_storage().expect("infallible")
         );
     }
 
     #[test]
     fn roundtrip_16bit_grayscale() {
-        let pixels = PngPixels::Gray16(vec![0, 32768, 65535, 1000].into());
-        let image = PngImage::new(
-            2,
-            2,
-            pixels.clone(),
-            PngEncoding {
-                color_mode: PngColorMode::Grayscale,
-                bit_depth: PngBitDepth::Sixteen,
-                interlaced: false,
-            },
-        )
-        .expect("infallible");
-        let bytes = image.to_bytes().expect("infallible");
-        let decoded = PngImage::from_bytes(&bytes).expect("infallible");
+        let pixels = Pixels::Gray16(vec![0, 32768, 65535, 1000].into());
+        let spec = ImageSpec {
+            width: 2,
+            height: 2,
+            color_mode: ColorMode::Grayscale,
+            bit_depth: BitDepth::Sixteen,
+            interlaced: false,
+        };
+        let bytes = encode_image(&spec, &pixels).expect("infallible");
+        let (_, decoded_pixels) = decode_image(&bytes).expect("infallible");
         assert_eq!(
-            decoded.pixels().as_u16_slice().expect("infallible"),
-            pixels.as_u16_slice().expect("infallible")
+            decoded_pixels.as_u16_storage().expect("infallible"),
+            pixels.as_u16_storage().expect("infallible")
         );
     }
 
     #[test]
     fn roundtrip_indexed_direct_fast_path() {
-        // Indexed8 pixels encoded as Indexed8 should use fast path.
         let indices = vec![0, 1, 2, 0, 1, 2];
         let palette = vec![255, 0, 0, 0, 255, 0, 0, 0, 255];
         let trns: Vec<u8> = vec![255, 128, 0];
-        let pixels = PngPixels::Indexed {
-            bit_depth: PngBitDepth::Eight,
+        let pixels = Pixels::Indexed {
+            bit_depth: BitDepth::Eight,
             indices: indices.clone().into(),
             palette: palette.clone().into(),
             trns: Some(trns.clone().into()),
         };
-        let image = PngImage::new(
-            3,
-            2,
-            pixels.clone(),
-            PngEncoding {
-                color_mode: PngColorMode::Indexed,
-                bit_depth: PngBitDepth::Eight,
-                interlaced: false,
-            },
-        )
-        .expect("infallible");
-        let bytes = image.to_bytes().expect("infallible");
-        let decoded = PngImage::from_bytes(&bytes).expect("infallible");
+        let spec = ImageSpec {
+            width: 3,
+            height: 2,
+            color_mode: ColorMode::Indexed,
+            bit_depth: BitDepth::Eight,
+            interlaced: false,
+        };
+        let bytes = encode_image(&spec, &pixels).expect("infallible");
+        let (_, decoded_pixels) = decode_image(&bytes).expect("infallible");
         assert_eq!(
-            decoded
-                .pixels()
+            decoded_pixels
                 .to_rgba8()
-                .as_u8_slice()
+                .as_u8_storage()
                 .expect("infallible"),
-            pixels.to_rgba8().as_u8_slice().expect("infallible")
+            pixels.to_rgba8().as_u8_storage().expect("infallible")
         );
     }
 
     #[test]
     fn rejects_16bit_pixels_with_8bit_encoding() {
-        let error = PngImage::new(
-            1,
-            1,
-            PngPixels::Rgba16(vec![0, 0, 0, 0].into()),
-            PngEncoding {
-                color_mode: PngColorMode::Rgba,
-                bit_depth: PngBitDepth::Eight,
-                interlaced: false,
-            },
-        )
-        .unwrap_err();
+        let pixels = Pixels::Rgba16(vec![0, 0, 0, 0].into());
+        let spec = ImageSpec {
+            width: 1,
+            height: 1,
+            color_mode: ColorMode::Rgba,
+            bit_depth: BitDepth::Eight,
+            interlaced: false,
+        };
+        let error = encode_image(&spec, &pixels).unwrap_err();
         assert!(matches!(error, Error::Unsupported(_)));
     }
 

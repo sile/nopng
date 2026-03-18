@@ -14,10 +14,10 @@ mod png_types;
 mod zlib;
 
 pub use png::Error;
-pub use png::PngBitDepth;
-pub use png::PngColorMode;
-pub use png::PngEncoding;
-pub use png::PngImage;
-pub use png::PngInfo;
-pub use png::PngPixels;
+pub use png::ImageSpec;
 pub use png::Result;
+pub use png::decode_image;
+pub use png::encode_image;
+pub use png_pixels::Pixels;
+pub use png_types::BitDepth;
+pub use png_types::ColorMode;
