@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use nopng::{PngColorMode, PngEncodeOptions, PngRgbaImage};
+use nopng::{PngColorMode, PngEncodeOptions, PngImage};
 use proptest::prelude::*;
 
 fn decode_with_png_crate(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), png::DecodingError> {
@@ -102,11 +102,11 @@ proptest! {
 
     #[test]
     fn roundtrip_random_rgba((width, height, rgba) in rgba_image_strategy(8, 8)) {
-        let image = PngRgbaImage::new(width, height, rgba.clone()).unwrap();
+        let image = PngImage::new(width, height, rgba.clone()).unwrap();
         let mut encoded = Vec::new();
         image.write_to(&mut encoded).unwrap();
 
-        let decoded = PngRgbaImage::from_bytes(&encoded).unwrap();
+        let decoded = PngImage::from_bytes(&encoded).unwrap();
         prop_assert_eq!(decoded.width(), width);
         prop_assert_eq!(decoded.height(), height);
         prop_assert_eq!(decoded.data(), rgba.as_slice());
@@ -114,7 +114,7 @@ proptest! {
 
     #[test]
     fn encoded_png_matches_png_crate_for_grayscale((width, height, rgba) in grayscale_levels_strategy(), interlaced in any::<bool>()) {
-        let image = PngRgbaImage::new(width, height, rgba.clone()).unwrap();
+        let image = PngImage::new(width, height, rgba.clone()).unwrap();
         let mut encoded = Vec::new();
         image.write_to_with_options(&mut encoded, PngEncodeOptions {
             color_mode: PngColorMode::Grayscale,
@@ -129,7 +129,7 @@ proptest! {
 
     #[test]
     fn encoded_png_matches_png_crate_for_indexed((width, height, rgba) in indexed_image_strategy(), interlaced in any::<bool>()) {
-        let image = PngRgbaImage::new(width, height, rgba.clone()).unwrap();
+        let image = PngImage::new(width, height, rgba.clone()).unwrap();
         let mut encoded = Vec::new();
         image.write_to_with_options(&mut encoded, PngEncodeOptions {
             color_mode: PngColorMode::Indexed,
@@ -144,6 +144,6 @@ proptest! {
 
     #[test]
     fn decoder_never_panics_on_arbitrary_bytes(data in proptest::collection::vec(any::<u8>(), 0..2048)) {
-        let _ = PngRgbaImage::from_bytes(&data);
+        let _ = PngImage::from_bytes(&data);
     }
 }

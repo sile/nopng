@@ -1,8 +1,8 @@
-use nopng::{PngDecodeError, PngRgbaImage};
+use nopng::{PngDecodeError, PngImage};
 
 #[test]
 fn decodes_grayscale_png() {
-    let image = PngRgbaImage::from_bytes(include_bytes!("data/gray_filters.png")).unwrap();
+    let image = PngImage::from_bytes(include_bytes!("data/gray_filters.png")).unwrap();
     assert_eq!(image.width(), 3);
     assert_eq!(image.height(), 2);
     assert_eq!(
@@ -16,7 +16,7 @@ fn decodes_grayscale_png() {
 
 #[test]
 fn decodes_grayscale_alpha_png() {
-    let image = PngRgbaImage::from_bytes(include_bytes!("data/gray_alpha_avg.png")).unwrap();
+    let image = PngImage::from_bytes(include_bytes!("data/gray_alpha_avg.png")).unwrap();
     assert_eq!(image.width(), 2);
     assert_eq!(image.height(), 2);
     assert_eq!(
@@ -29,7 +29,7 @@ fn decodes_grayscale_alpha_png() {
 
 #[test]
 fn decodes_rgb_png() {
-    let image = PngRgbaImage::from_bytes(include_bytes!("data/rgb_sub_up.png")).unwrap();
+    let image = PngImage::from_bytes(include_bytes!("data/rgb_sub_up.png")).unwrap();
     assert_eq!(image.width(), 2);
     assert_eq!(image.height(), 2);
     assert_eq!(
@@ -42,7 +42,7 @@ fn decodes_rgb_png() {
 
 #[test]
 fn decodes_rgba_png_with_split_idat() {
-    let image = PngRgbaImage::from_bytes(include_bytes!("data/rgba_paeth_split_idat.png")).unwrap();
+    let image = PngImage::from_bytes(include_bytes!("data/rgba_paeth_split_idat.png")).unwrap();
     assert_eq!(image.width(), 2);
     assert_eq!(image.height(), 2);
     assert_eq!(
@@ -55,7 +55,7 @@ fn decodes_rgba_png_with_split_idat() {
 
 #[test]
 fn decodes_1bit_grayscale_png() {
-    let image = PngRgbaImage::from_bytes(include_bytes!("data/gray_1bit_filters.png")).unwrap();
+    let image = PngImage::from_bytes(include_bytes!("data/gray_1bit_filters.png")).unwrap();
     assert_eq!(image.width(), 5);
     assert_eq!(image.height(), 2);
     assert_eq!(
@@ -69,7 +69,7 @@ fn decodes_1bit_grayscale_png() {
 
 #[test]
 fn decodes_2bit_grayscale_with_trns() {
-    let image = PngRgbaImage::from_bytes(include_bytes!("data/gray_2bit_trns.png")).unwrap();
+    let image = PngImage::from_bytes(include_bytes!("data/gray_2bit_trns.png")).unwrap();
     assert_eq!(image.width(), 4);
     assert_eq!(image.height(), 2);
     assert_eq!(
@@ -83,7 +83,7 @@ fn decodes_2bit_grayscale_with_trns() {
 
 #[test]
 fn decodes_4bit_palette_with_trns() {
-    let image = PngRgbaImage::from_bytes(include_bytes!("data/palette_4bit_trns.png")).unwrap();
+    let image = PngImage::from_bytes(include_bytes!("data/palette_4bit_trns.png")).unwrap();
     assert_eq!(image.width(), 4);
     assert_eq!(image.height(), 2);
     assert_eq!(
@@ -98,7 +98,7 @@ fn decodes_4bit_palette_with_trns() {
 #[test]
 fn decodes_8bit_palette_with_split_idat() {
     let image =
-        PngRgbaImage::from_bytes(include_bytes!("data/palette_8bit_split_idat.png")).unwrap();
+        PngImage::from_bytes(include_bytes!("data/palette_8bit_split_idat.png")).unwrap();
     assert_eq!(image.width(), 3);
     assert_eq!(image.height(), 2);
     assert_eq!(
@@ -112,7 +112,7 @@ fn decodes_8bit_palette_with_split_idat() {
 
 #[test]
 fn decodes_16bit_grayscale_with_trns() {
-    let image = PngRgbaImage::from_bytes(include_bytes!("data/gray16_trns.png")).unwrap();
+    let image = PngImage::from_bytes(include_bytes!("data/gray16_trns.png")).unwrap();
     assert_eq!(image.width(), 2);
     assert_eq!(image.height(), 2);
     assert_eq!(
@@ -125,7 +125,7 @@ fn decodes_16bit_grayscale_with_trns() {
 
 #[test]
 fn decodes_16bit_truecolor_with_trns() {
-    let image = PngRgbaImage::from_bytes(include_bytes!("data/rgb16_trns.png")).unwrap();
+    let image = PngImage::from_bytes(include_bytes!("data/rgb16_trns.png")).unwrap();
     assert_eq!(image.width(), 2);
     assert_eq!(image.height(), 1);
     assert_eq!(image.data(), &[255, 0, 0, 0, 17, 34, 51, 255,]);
@@ -133,7 +133,7 @@ fn decodes_16bit_truecolor_with_trns() {
 
 #[test]
 fn decodes_16bit_grayscale_alpha() {
-    let image = PngRgbaImage::from_bytes(include_bytes!("data/gray_alpha16.png")).unwrap();
+    let image = PngImage::from_bytes(include_bytes!("data/gray_alpha16.png")).unwrap();
     assert_eq!(image.width(), 2);
     assert_eq!(image.height(), 1);
     assert_eq!(image.data(), &[0, 0, 0, 255, 128, 128, 128, 18,]);
@@ -141,7 +141,7 @@ fn decodes_16bit_grayscale_alpha() {
 
 #[test]
 fn decodes_16bit_rgba() {
-    let image = PngRgbaImage::from_bytes(include_bytes!("data/rgba16.png")).unwrap();
+    let image = PngImage::from_bytes(include_bytes!("data/rgba16.png")).unwrap();
     assert_eq!(image.width(), 2);
     assert_eq!(image.height(), 1);
     assert_eq!(image.data(), &[255, 128, 0, 255, 18, 171, 255, 1,]);
@@ -149,7 +149,7 @@ fn decodes_16bit_rgba() {
 
 #[test]
 fn decodes_interlaced_palette_png() {
-    let image = PngRgbaImage::from_bytes(include_bytes!("data/palette_interlaced.png")).unwrap();
+    let image = PngImage::from_bytes(include_bytes!("data/palette_interlaced.png")).unwrap();
     assert_eq!(image.width(), 5);
     assert_eq!(image.height(), 5);
     assert_eq!(
@@ -166,7 +166,7 @@ fn decodes_interlaced_palette_png() {
 
 #[test]
 fn decodes_interlaced_rgba_png() {
-    let image = PngRgbaImage::from_bytes(include_bytes!("data/rgba_interlaced.png")).unwrap();
+    let image = PngImage::from_bytes(include_bytes!("data/rgba_interlaced.png")).unwrap();
     assert_eq!(image.width(), 4);
     assert_eq!(image.height(), 4);
     assert_eq!(
@@ -182,7 +182,7 @@ fn decodes_interlaced_rgba_png() {
 
 #[test]
 fn decodes_interlaced_16bit_grayscale_png() {
-    let image = PngRgbaImage::from_bytes(include_bytes!("data/gray16_interlaced.png")).unwrap();
+    let image = PngImage::from_bytes(include_bytes!("data/gray16_interlaced.png")).unwrap();
     assert_eq!(image.width(), 5);
     assert_eq!(image.height(), 4);
     assert_eq!(
@@ -202,7 +202,7 @@ fn rejects_crc_mismatch() {
     let mut bytes = include_bytes!("data/gray_filters.png").to_vec();
     let index = bytes.len() - 1;
     bytes[index] ^= 0x01;
-    let error = PngRgbaImage::from_bytes(&bytes).unwrap_err();
+    let error = PngImage::from_bytes(&bytes).unwrap_err();
     assert!(
         matches!(error, PngDecodeError::InvalidChunk(message) if message.contains("CRC mismatch"))
     );
@@ -213,7 +213,7 @@ fn rejects_missing_plte_for_palette_image() {
     let mut bytes = include_bytes!("data/palette_4bit_trns.png").to_vec();
     remove_chunk(&mut bytes, b"PLTE");
     remove_chunk(&mut bytes, b"tRNS");
-    let error = PngRgbaImage::from_bytes(&bytes).unwrap_err();
+    let error = PngImage::from_bytes(&bytes).unwrap_err();
     assert!(
         matches!(error, PngDecodeError::InvalidChunk(message) if message.contains("missing PLTE"))
     );
@@ -225,7 +225,7 @@ fn rejects_plte_after_idat() {
         include_bytes!("data/palette_4bit_trns.png"),
         &[*b"PLTE", *b"tRNS"],
     );
-    let error = PngRgbaImage::from_bytes(&bytes).unwrap_err();
+    let error = PngImage::from_bytes(&bytes).unwrap_err();
     assert!(
         matches!(error, PngDecodeError::InvalidChunk(message) if message.contains("PLTE appears after IDAT"))
     );
@@ -238,7 +238,7 @@ fn rejects_trns_longer_than_palette() {
         b"tRNS",
         &[255, 128, 0, 255, 12],
     );
-    let error = PngRgbaImage::from_bytes(&bytes).unwrap_err();
+    let error = PngImage::from_bytes(&bytes).unwrap_err();
     assert!(
         matches!(error, PngDecodeError::InvalidChunk(message) if message.contains("tRNS length exceeds palette length"))
     );
@@ -251,7 +251,7 @@ fn rejects_palette_index_out_of_range() {
         b"PLTE",
         &[0, 0, 0],
     );
-    let error = PngRgbaImage::from_bytes(&bytes).unwrap_err();
+    let error = PngImage::from_bytes(&bytes).unwrap_err();
     assert!(
         matches!(error, PngDecodeError::InvalidData(message) if message.contains("palette index out of range"))
     );

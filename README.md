@@ -23,12 +23,12 @@ Supported Decoding
   - Truecolor with alpha: 8/16-bit
 - `PLTE` and `tRNS`
 
-Decoded images are returned as RGBA8 via `PngRgbaImage`.
+Decoded images are returned as RGBA8 via `PngImage`.
 
 Supported Encoding
 ------------------
 
-- Source image type: `PngRgbaImage` (`RGBA8`)
+- Source image type: `PngImage` (`RGBA8`)
 - `write_to()`:
   - chooses a PNG representation automatically
   - may emit grayscale, grayscale+alpha, rgb, rgba, or indexed-color PNG
@@ -44,11 +44,11 @@ Example
 -------
 
 ```rust
-use nopng::{PngColorMode, PngEncodeOptions, PngRgbaImage};
+use nopng::{PngColorMode, PngEncodeOptions, PngImage};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bytes = std::fs::read("image.png")?;
-    let image = PngRgbaImage::from_bytes(&bytes)?;
+    let image = PngImage::from_bytes(&bytes)?;
 
     println!("{}x{}", image.width(), image.height());
     println!("rgba bytes: {}", image.data().len());

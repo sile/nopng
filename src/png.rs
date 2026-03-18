@@ -146,13 +146,13 @@ impl From<std::io::Error> for PngDecodeError {
 }
 
 #[derive(Debug, Clone)]
-pub struct PngRgbaImage {
+pub struct PngImage {
     width: u32,
     height: u32,
     data: Vec<u8>,
 }
 
-impl PngRgbaImage {
+impl PngImage {
     pub fn new(width: u32, height: u32, data: Vec<u8>) -> Option<Self> {
         if (width * height * 4) as usize != data.len() {
             None
@@ -1400,15 +1400,15 @@ impl<'a> Cursor<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{IhdrChunk, PngColorMode, PngEncodeOptions, PngRgbaImage};
+    use super::{IhdrChunk, PngColorMode, PngEncodeOptions, PngImage};
 
     #[test]
     fn roundtrip_rgba_writer_and_reader() {
-        let image = PngRgbaImage::new(2, 1, vec![255, 0, 0, 255, 0, 255, 0, 128]).unwrap();
+        let image = PngImage::new(2, 1, vec![255, 0, 0, 255, 0, 255, 0, 128]).unwrap();
         let mut bytes = Vec::new();
         image.write_to(&mut bytes).unwrap();
 
-        let decoded = PngRgbaImage::from_bytes(&bytes).unwrap();
+        let decoded = PngImage::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.width(), 2);
         assert_eq!(decoded.height(), 1);
         assert_eq!(decoded.data(), image.data());
@@ -1416,7 +1416,7 @@ mod tests {
 
     #[test]
     fn write_to_auto_prefers_grayscale_for_opaque_grayscale() {
-        let image = PngRgbaImage::new(
+        let image = PngImage::new(
             4,
             1,
             vec![
@@ -1432,13 +1432,13 @@ mod tests {
         assert_eq!(ihdr.color_type, IhdrChunk::COLOR_TYPE_GRAYSCALE);
         assert_eq!(ihdr.interlace_method, 0);
         assert!(find_chunk(&bytes, b"PLTE").is_none());
-        let decoded = PngRgbaImage::from_bytes(&bytes).unwrap();
+        let decoded = PngImage::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.data(), image.data());
     }
 
     #[test]
     fn write_to_with_options_can_force_indexed_and_trns() {
-        let image = PngRgbaImage::new(
+        let image = PngImage::new(
             4,
             1,
             vec![
@@ -1462,13 +1462,13 @@ mod tests {
         assert_eq!(ihdr.color_type, IhdrChunk::COLOR_TYPE_INDEXED);
         assert!(find_chunk(&bytes, b"PLTE").is_some());
         assert!(find_chunk(&bytes, b"tRNS").is_some());
-        let decoded = PngRgbaImage::from_bytes(&bytes).unwrap();
+        let decoded = PngImage::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.data(), image.data());
     }
 
     #[test]
     fn write_to_with_options_can_force_adam7() {
-        let image = PngRgbaImage::new(
+        let image = PngImage::new(
             3,
             3,
             vec![
@@ -1491,7 +1491,7 @@ mod tests {
         let ihdr = read_ihdr(&bytes);
         assert_eq!(ihdr.color_type, IhdrChunk::COLOR_TYPE_RGB);
         assert_eq!(ihdr.interlace_method, 1);
-        let decoded = PngRgbaImage::from_bytes(&bytes).unwrap();
+        let decoded = PngImage::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.data(), image.data());
     }
 

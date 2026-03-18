@@ -1,4 +1,4 @@
-use nopng::PngRgbaImage;
+use nopng::PngImage;
 
 fn main() -> std::io::Result<()> {
     // Create a 32x32 RGBA image (4 bytes per pixel)
@@ -16,7 +16,7 @@ fn main() -> std::io::Result<()> {
     }
 
     // Create the PNG image
-    let png_image = PngRgbaImage::new(width, height, data).expect("infallible");
+    let png_image = PngImage::new(width, height, data).expect("infallible");
 
     // Write the PNG to stdout
     let stdout = std::io::stdout();
