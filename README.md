@@ -10,10 +10,39 @@ A Rust [PNG] library with no dependencies.
 
 [PNG]: https://www.w3.org/TR/PNG/
 
-TODO (TBD)
------------
+Supported Decoding
+------------------
 
-- PLTE (Palette) Chunk
+- Non-interlaced PNG
+- Adam7 interlaced PNG
+- Color types:
+  - Grayscale: 1/2/4/8/16-bit
+  - Truecolor: 8/16-bit
+  - Indexed-color: 1/2/4/8-bit
+  - Grayscale with alpha: 8/16-bit
+  - Truecolor with alpha: 8/16-bit
+- `PLTE` and `tRNS`
+
+Decoded images are returned as RGBA8 via `PngRgbaImage`.
+
+Example
+-------
+
+```rust
+use nopng::PngRgbaImage;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let bytes = std::fs::read("image.png")?;
+    let image = PngRgbaImage::from_bytes(&bytes)?;
+
+    println!("{}x{}", image.width(), image.height());
+    println!("rgba bytes: {}", image.data().len());
+    Ok(())
+}
+```
+
+TODO
+----
+
 - Animated PNG
-- Decoding
 - Encoding with compression
