@@ -1,6 +1,6 @@
 use std::io::{Read, Write};
 
-use crate::chunk::{IdatChunk, IendChunk, IhdrChunk};
+use crate::chunk::{IdatChunk, IendChunk, IhdrChunk, PlteChunk, TrnsChunk};
 use crate::{adler32, crc, deflate};
 
 const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
@@ -56,6 +56,63 @@ pub enum PngDecodeError {
     InvalidChunk(String),
     Unsupported(String),
     InvalidData(String),
+}
+
+#[derive(Debug)]
+pub enum PngEncodeError {
+    Io(std::io::Error),
+    Unsupported(String),
+    InvalidData(String),
+}
+
+impl std::fmt::Display for PngEncodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(error) => error.fmt(f),
+            Self::Unsupported(message) => f.write_str(message),
+            Self::InvalidData(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for PngEncodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Unsupported(_) | Self::InvalidData(_) => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for PngEncodeError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PngColorMode {
+    Auto,
+    Grayscale,
+    GrayscaleAlpha,
+    Rgb,
+    Rgba,
+    Indexed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PngEncodeOptions {
+    pub color_mode: PngColorMode,
+    pub interlaced: bool,
+}
+
+impl Default for PngEncodeOptions {
+    fn default() -> Self {
+        Self {
+            color_mode: PngColorMode::Auto,
+            interlaced: false,
+        }
+    }
 }
 
 impl std::fmt::Display for PngDecodeError {
@@ -226,18 +283,34 @@ impl PngRgbaImage {
     }
 
     pub fn write_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        self.write_to_with_options(writer, PngEncodeOptions::default())
+            .map_err(encode_error_into_io)
+    }
+
+    pub fn write_to_with_options<W: Write>(
+        &self,
+        writer: &mut W,
+        options: PngEncodeOptions,
+    ) -> Result<(), PngEncodeError> {
+        let encoded = EncodedImage::from_rgba(self.width, self.height, &self.data, options)?;
         writer.write_all(&PNG_SIGNATURE)?;
 
         IhdrChunk {
             width: self.width,
             height: self.height,
-            bit_depth: 8,
-            color_type: IhdrChunk::COLOR_TYPE_RGBA,
+            bit_depth: encoded.bit_depth,
+            color_type: encoded.color_type,
+            interlace_method: encoded.interlace_method,
         }
         .write_to(writer)?;
+        if let Some(palette) = encoded.palette.as_deref() {
+            PlteChunk { palette }.write_to(writer)?;
+        }
+        if let Some(trns) = encoded.trns.as_deref() {
+            TrnsChunk { data: trns }.write_to(writer)?;
+        }
         IdatChunk {
-            stride: self.width as usize * 4,
-            data: &self.data,
+            filtered_data: &encoded.filtered_data,
         }
         .write_to(writer)?;
         IendChunk.write_to(writer)?;
@@ -815,6 +888,372 @@ fn downsample_u16(sample: u16) -> u8 {
     (sample >> 8) as u8
 }
 
+fn encode_error_into_io(error: PngEncodeError) -> std::io::Error {
+    match error {
+        PngEncodeError::Io(error) => error,
+        PngEncodeError::Unsupported(message) | PngEncodeError::InvalidData(message) => {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, message)
+        }
+    }
+}
+
+#[derive(Debug)]
+struct EncodedImage {
+    bit_depth: u8,
+    color_type: u8,
+    interlace_method: u8,
+    filtered_data: Vec<u8>,
+    palette: Option<Vec<[u8; 3]>>,
+    trns: Option<Vec<u8>>,
+}
+
+impl EncodedImage {
+    fn from_rgba(
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+        options: PngEncodeOptions,
+    ) -> Result<Self, PngEncodeError> {
+        let pixels = rgba
+            .chunks_exact(4)
+            .map(|chunk| [chunk[0], chunk[1], chunk[2], chunk[3]])
+            .collect::<Vec<_>>();
+        let target = EncodingTarget::analyze(&pixels, options.color_mode)?;
+        let interlace_method = u8::from(options.interlaced);
+        let filtered_data = if options.interlaced {
+            build_adam7_filtered_data(width, height, &pixels, &target)?
+        } else {
+            build_filtered_data(width, height, &pixels, &target)?
+        };
+        Ok(Self {
+            bit_depth: target.bit_depth,
+            color_type: target.color_type,
+            interlace_method,
+            filtered_data,
+            palette: target.palette,
+            trns: target.trns,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct EncodingTarget {
+    bit_depth: u8,
+    color_type: u8,
+    palette: Option<Vec<[u8; 3]>>,
+    trns: Option<Vec<u8>>,
+    pixel_kind: EncodedPixelKind,
+}
+
+#[derive(Debug)]
+enum EncodedPixelKind {
+    GrayscalePacked,
+    Grayscale8,
+    GrayscaleAlpha8,
+    Rgb8,
+    Rgba8,
+    Indexed,
+}
+
+impl EncodingTarget {
+    fn analyze(pixels: &[[u8; 4]], mode: PngColorMode) -> Result<Self, PngEncodeError> {
+        let opaque = pixels.iter().all(|pixel| pixel[3] == 255);
+        let grayscale = pixels
+            .iter()
+            .all(|pixel| pixel[0] == pixel[1] && pixel[1] == pixel[2]);
+        let gray_level_count = pixels
+            .iter()
+            .map(|pixel| pixel[0])
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+
+        let indexed = analyze_palette(pixels);
+
+        let mode = match mode {
+            PngColorMode::Auto => {
+                if grayscale && opaque {
+                    PngColorMode::Grayscale
+                } else if grayscale {
+                    PngColorMode::GrayscaleAlpha
+                } else if opaque {
+                    PngColorMode::Rgb
+                } else if indexed.is_some() {
+                    PngColorMode::Indexed
+                } else {
+                    PngColorMode::Rgba
+                }
+            }
+            other => other,
+        };
+
+        match mode {
+            PngColorMode::Grayscale => {
+                if !grayscale || !opaque {
+                    return Err(PngEncodeError::Unsupported(
+                        "grayscale encoding requires opaque grayscale pixels".into(),
+                    ));
+                }
+                let bit_depth = grayscale_bit_depth(pixels, gray_level_count);
+                Ok(Self {
+                    bit_depth,
+                    color_type: IhdrChunk::COLOR_TYPE_GRAYSCALE,
+                    palette: None,
+                    trns: None,
+                    pixel_kind: if bit_depth < 8 {
+                        EncodedPixelKind::GrayscalePacked
+                    } else {
+                        EncodedPixelKind::Grayscale8
+                    },
+                })
+            }
+            PngColorMode::GrayscaleAlpha => {
+                if !grayscale {
+                    return Err(PngEncodeError::Unsupported(
+                        "grayscale+alpha encoding requires grayscale pixels".into(),
+                    ));
+                }
+                Ok(Self {
+                    bit_depth: 8,
+                    color_type: IhdrChunk::COLOR_TYPE_GRAYSCALE_ALPHA,
+                    palette: None,
+                    trns: None,
+                    pixel_kind: EncodedPixelKind::GrayscaleAlpha8,
+                })
+            }
+            PngColorMode::Rgb => {
+                if !opaque {
+                    return Err(PngEncodeError::Unsupported(
+                        "rgb encoding requires opaque pixels".into(),
+                    ));
+                }
+                Ok(Self {
+                    bit_depth: 8,
+                    color_type: IhdrChunk::COLOR_TYPE_RGB,
+                    palette: None,
+                    trns: None,
+                    pixel_kind: EncodedPixelKind::Rgb8,
+                })
+            }
+            PngColorMode::Rgba => Ok(Self {
+                bit_depth: 8,
+                color_type: IhdrChunk::COLOR_TYPE_RGBA,
+                palette: None,
+                trns: None,
+                pixel_kind: EncodedPixelKind::Rgba8,
+            }),
+            PngColorMode::Indexed => {
+                let Some(indexed) = indexed else {
+                    return Err(PngEncodeError::Unsupported(
+                        "indexed encoding requires at most 256 distinct colors".into(),
+                    ));
+                };
+                let bit_depth = indexed_bit_depth(indexed.palette.len());
+                Ok(Self {
+                    bit_depth,
+                    color_type: IhdrChunk::COLOR_TYPE_INDEXED,
+                    palette: Some(indexed.palette),
+                    trns: indexed.trns,
+                    pixel_kind: EncodedPixelKind::Indexed,
+                })
+            }
+            PngColorMode::Auto => unreachable!(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct IndexedAnalysis {
+    palette: Vec<[u8; 3]>,
+    trns: Option<Vec<u8>>,
+}
+
+fn analyze_palette(pixels: &[[u8; 4]]) -> Option<IndexedAnalysis> {
+    use std::collections::BTreeMap;
+
+    let mut map = BTreeMap::<[u8; 4], usize>::new();
+    let mut palette = Vec::<[u8; 3]>::new();
+    let mut alpha = Vec::<u8>::new();
+    for &pixel in pixels {
+        if map.contains_key(&pixel) {
+            continue;
+        }
+        if palette.len() == 256 {
+            return None;
+        }
+        map.insert(pixel, palette.len());
+        palette.push([pixel[0], pixel[1], pixel[2]]);
+        alpha.push(pixel[3]);
+    }
+    let trns = if alpha.iter().all(|&value| value == 255) {
+        None
+    } else {
+        while alpha.last() == Some(&255) {
+            alpha.pop();
+        }
+        Some(alpha)
+    };
+    Some(IndexedAnalysis { palette, trns })
+}
+
+fn grayscale_bit_depth(pixels: &[[u8; 4]], gray_level_count: usize) -> u8 {
+    if pixels.iter().all(|pixel| matches!(pixel[0], 0 | 255)) {
+        1
+    } else if pixels
+        .iter()
+        .all(|pixel| matches!(pixel[0], 0 | 85 | 170 | 255))
+    {
+        2
+    } else if pixels.iter().all(|pixel| pixel[0] % 17 == 0) && gray_level_count <= 16 {
+        4
+    } else {
+        8
+    }
+}
+
+fn indexed_bit_depth(size: usize) -> u8 {
+    match size {
+        0 => unreachable!(),
+        1..=2 => 1,
+        3..=4 => 2,
+        5..=16 => 4,
+        _ => 8,
+    }
+}
+
+fn build_filtered_data(
+    width: u32,
+    height: u32,
+    pixels: &[[u8; 4]],
+    target: &EncodingTarget,
+) -> Result<Vec<u8>, PngEncodeError> {
+    let mut filtered = Vec::new();
+    for row in 0..height as usize {
+        filtered.push(0);
+        let row_pixels = &pixels[row * width as usize..(row + 1) * width as usize];
+        encode_row_into(&mut filtered, row_pixels, target)?;
+    }
+    Ok(filtered)
+}
+
+fn build_adam7_filtered_data(
+    width: u32,
+    height: u32,
+    pixels: &[[u8; 4]],
+    target: &EncodingTarget,
+) -> Result<Vec<u8>, PngEncodeError> {
+    let mut filtered = Vec::new();
+    for pass in ADAM7_PASSES {
+        let pass_width = adam7_axis_size(width, pass.x_start, pass.x_step);
+        let pass_height = adam7_axis_size(height, pass.y_start, pass.y_step);
+        if pass_width == 0 || pass_height == 0 {
+            continue;
+        }
+        for pass_y in 0..pass_height as usize {
+            filtered.push(0);
+            let y = pass.y_start as usize + pass_y * pass.y_step as usize;
+            let row_pixels = (0..pass_width as usize)
+                .map(|pass_x| {
+                    let x = pass.x_start as usize + pass_x * pass.x_step as usize;
+                    pixels[y * width as usize + x]
+                })
+                .collect::<Vec<_>>();
+            encode_row_into(&mut filtered, &row_pixels, target)?;
+        }
+    }
+    Ok(filtered)
+}
+
+fn encode_row_into(
+    out: &mut Vec<u8>,
+    row_pixels: &[[u8; 4]],
+    target: &EncodingTarget,
+) -> Result<(), PngEncodeError> {
+    match target.pixel_kind {
+        EncodedPixelKind::GrayscalePacked => {
+            let samples = row_pixels
+                .iter()
+                .map(|pixel| quantize_grayscale_sample(pixel[0], target.bit_depth))
+                .collect::<Vec<_>>();
+            pack_samples_to(out, &samples, target.bit_depth);
+        }
+        EncodedPixelKind::Grayscale8 => {
+            out.extend(row_pixels.iter().map(|pixel| pixel[0]));
+        }
+        EncodedPixelKind::GrayscaleAlpha8 => {
+            for pixel in row_pixels {
+                out.extend_from_slice(&[pixel[0], pixel[3]]);
+            }
+        }
+        EncodedPixelKind::Rgb8 => {
+            for pixel in row_pixels {
+                out.extend_from_slice(&pixel[..3]);
+            }
+        }
+        EncodedPixelKind::Rgba8 => {
+            for pixel in row_pixels {
+                out.extend_from_slice(pixel);
+            }
+        }
+        EncodedPixelKind::Indexed => {
+            let palette = target.palette.as_ref().expect("palette");
+            let indices = row_pixels
+                .iter()
+                .map(|pixel| {
+                    palette
+                        .iter()
+                        .zip(target_alpha(target))
+                        .position(|(rgb, alpha)| {
+                            *rgb == [pixel[0], pixel[1], pixel[2]] && alpha == pixel[3]
+                        })
+                        .map(|index| index as u8)
+                        .ok_or_else(|| {
+                            PngEncodeError::InvalidData("pixel missing from indexed palette".into())
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            pack_samples_to(out, &indices, target.bit_depth);
+        }
+    }
+    Ok(())
+}
+
+fn target_alpha(target: &EncodingTarget) -> impl Iterator<Item = u8> + '_ {
+    let trns = target.trns.as_deref().unwrap_or(&[]);
+    (0..target.palette.as_ref().map_or(0, Vec::len))
+        .map(move |index| trns.get(index).copied().unwrap_or(255))
+}
+
+fn pack_samples_to(out: &mut Vec<u8>, samples: &[u8], bit_depth: u8) {
+    if bit_depth == 8 {
+        out.extend_from_slice(samples);
+        return;
+    }
+    let mut acc = 0u16;
+    let mut bits = 0usize;
+    for &sample in samples {
+        acc = (acc << bit_depth) | u16::from(sample);
+        bits += usize::from(bit_depth);
+        if bits >= 8 {
+            out.push((acc >> (bits - 8)) as u8);
+            bits -= 8;
+            acc &= (1u16 << bits).saturating_sub(1);
+        }
+    }
+    if bits > 0 {
+        out.push((acc << (8 - bits)) as u8);
+    }
+}
+
+fn quantize_grayscale_sample(sample: u8, bit_depth: u8) -> u8 {
+    match bit_depth {
+        1 => sample / 255,
+        2 => sample / 85,
+        4 => sample / 17,
+        8 => sample,
+        _ => unreachable!(),
+    }
+}
+
 fn packed_stride_for_width(header: &PngHeader, width: u32) -> Result<usize, PngDecodeError> {
     (width as usize)
         .checked_mul(header.bits_per_pixel())
@@ -961,7 +1400,7 @@ impl<'a> Cursor<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::PngRgbaImage;
+    use super::{IhdrChunk, PngColorMode, PngEncodeOptions, PngRgbaImage};
 
     #[test]
     fn roundtrip_rgba_writer_and_reader() {
@@ -973,5 +1412,117 @@ mod tests {
         assert_eq!(decoded.width(), 2);
         assert_eq!(decoded.height(), 1);
         assert_eq!(decoded.data(), image.data());
+    }
+
+    #[test]
+    fn write_to_auto_prefers_grayscale_for_opaque_grayscale() {
+        let image = PngRgbaImage::new(
+            4,
+            1,
+            vec![
+                0, 0, 0, 255, 85, 85, 85, 255, 170, 170, 170, 255, 255, 255, 255, 255,
+            ],
+        )
+        .unwrap();
+        let mut bytes = Vec::new();
+        image.write_to(&mut bytes).unwrap();
+
+        let ihdr = read_ihdr(&bytes);
+        assert_eq!(ihdr.bit_depth, 2);
+        assert_eq!(ihdr.color_type, IhdrChunk::COLOR_TYPE_GRAYSCALE);
+        assert_eq!(ihdr.interlace_method, 0);
+        assert!(find_chunk(&bytes, b"PLTE").is_none());
+        let decoded = PngRgbaImage::from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.data(), image.data());
+    }
+
+    #[test]
+    fn write_to_with_options_can_force_indexed_and_trns() {
+        let image = PngRgbaImage::new(
+            4,
+            1,
+            vec![
+                255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 255, 255, 255, 0, 64,
+            ],
+        )
+        .unwrap();
+        let mut bytes = Vec::new();
+        image
+            .write_to_with_options(
+                &mut bytes,
+                PngEncodeOptions {
+                    color_mode: PngColorMode::Indexed,
+                    interlaced: false,
+                },
+            )
+            .unwrap();
+
+        let ihdr = read_ihdr(&bytes);
+        assert_eq!(ihdr.bit_depth, 2);
+        assert_eq!(ihdr.color_type, IhdrChunk::COLOR_TYPE_INDEXED);
+        assert!(find_chunk(&bytes, b"PLTE").is_some());
+        assert!(find_chunk(&bytes, b"tRNS").is_some());
+        let decoded = PngRgbaImage::from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.data(), image.data());
+    }
+
+    #[test]
+    fn write_to_with_options_can_force_adam7() {
+        let image = PngRgbaImage::new(
+            3,
+            3,
+            vec![
+                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 10, 20, 30, 255, 40, 50, 60, 255,
+                70, 80, 90, 255, 100, 110, 120, 255, 130, 140, 150, 255, 160, 170, 180, 255,
+            ],
+        )
+        .unwrap();
+        let mut bytes = Vec::new();
+        image
+            .write_to_with_options(
+                &mut bytes,
+                PngEncodeOptions {
+                    color_mode: PngColorMode::Rgb,
+                    interlaced: true,
+                },
+            )
+            .unwrap();
+
+        let ihdr = read_ihdr(&bytes);
+        assert_eq!(ihdr.color_type, IhdrChunk::COLOR_TYPE_RGB);
+        assert_eq!(ihdr.interlace_method, 1);
+        let decoded = PngRgbaImage::from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.data(), image.data());
+    }
+
+    struct IhdrInfo {
+        bit_depth: u8,
+        color_type: u8,
+        interlace_method: u8,
+    }
+
+    fn read_ihdr(bytes: &[u8]) -> IhdrInfo {
+        let ihdr = find_chunk(bytes, b"IHDR").unwrap();
+        IhdrInfo {
+            bit_depth: ihdr[8],
+            color_type: ihdr[9],
+            interlace_method: ihdr[12],
+        }
+    }
+
+    fn find_chunk<'a>(bytes: &'a [u8], chunk_type: &[u8; 4]) -> Option<&'a [u8]> {
+        let mut offset = 8;
+        while offset + 12 <= bytes.len() {
+            let length = u32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+            offset += 4;
+            let current_type: [u8; 4] = bytes[offset..offset + 4].try_into().unwrap();
+            offset += 4;
+            let data = &bytes[offset..offset + length];
+            offset += length + 4;
+            if &current_type == chunk_type {
+                return Some(data);
+            }
+        }
+        None
     }
 }

@@ -25,11 +25,26 @@ Supported Decoding
 
 Decoded images are returned as RGBA8 via `PngRgbaImage`.
 
+Supported Encoding
+------------------
+
+- Source image type: `PngRgbaImage` (`RGBA8`)
+- `write_to()`:
+  - chooses a PNG representation automatically
+  - may emit grayscale, grayscale+alpha, rgb, rgba, or indexed-color PNG
+- `write_to_with_options()`:
+  - can force `grayscale`, `grayscale+alpha`, `rgb`, `rgba`, or `indexed-color`
+  - can enable Adam7 interlacing
+- Bit depth selection:
+  - grayscale: `1/2/4/8-bit` when exactly representable
+  - indexed-color: `1/2/4/8-bit`
+  - other color types: `8-bit`
+
 Example
 -------
 
 ```rust
-use nopng::PngRgbaImage;
+use nopng::{PngColorMode, PngEncodeOptions, PngRgbaImage};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bytes = std::fs::read("image.png")?;
@@ -37,6 +52,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("{}x{}", image.width(), image.height());
     println!("rgba bytes: {}", image.data().len());
+
+    let mut encoded = Vec::new();
+    image.write_to_with_options(
+        &mut encoded,
+        PngEncodeOptions {
+            color_mode: PngColorMode::Indexed,
+            interlaced: true,
+        },
+    )?;
     Ok(())
 }
 ```
