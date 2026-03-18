@@ -107,14 +107,14 @@ proptest! {
             color_mode: PngColorMode::Rgba,
             bit_depth: PngBitDepth::Eight,
             interlaced: false,
-        }).unwrap();
-        let encoded = image.to_bytes().unwrap();
+        }).expect("infallible");
+        let encoded = image.to_bytes().expect("infallible");
 
-        let decoded = PngImage::from_bytes(&encoded).unwrap();
+        let decoded = PngImage::from_bytes(&encoded).expect("infallible");
         let decoded_rgba = decoded.pixels().to_rgba8();
         prop_assert_eq!(decoded.width(), width);
         prop_assert_eq!(decoded.height(), height);
-        prop_assert_eq!(decoded_rgba.as_u8_slice().unwrap(), rgba.as_slice());
+        prop_assert_eq!(decoded_rgba.as_u8_slice().expect("infallible"), rgba.as_slice());
     }
 
     #[test]
@@ -128,15 +128,16 @@ proptest! {
                 bit_depth: PngBitDepth::Eight,
                 interlaced: false,
             },
-        ).unwrap();
+        ).expect("infallible");
         *image.encoding_mut() = PngEncoding {
             color_mode: PngColorMode::Grayscale,
             bit_depth: PngBitDepth::Two,
             interlaced,
         };
-        let encoded = image.to_bytes().unwrap();
+        let encoded = image.to_bytes().expect("infallible");
 
-        let (decoded_width, decoded_height, decoded_rgba) = decode_with_png_crate(&encoded).unwrap();
+        let (decoded_width, decoded_height, decoded_rgba) =
+            decode_with_png_crate(&encoded).expect("infallible");
         prop_assert_eq!(decoded_width, width);
         prop_assert_eq!(decoded_height, height);
         prop_assert_eq!(decoded_rgba, rgba);
@@ -153,15 +154,16 @@ proptest! {
                 bit_depth: PngBitDepth::Eight,
                 interlaced: false,
             },
-        ).unwrap();
+        ).expect("infallible");
         *image.encoding_mut() = PngEncoding {
             color_mode: PngColorMode::Indexed,
             bit_depth: PngBitDepth::Four,
             interlaced,
         };
-        let encoded = image.to_bytes().unwrap();
+        let encoded = image.to_bytes().expect("infallible");
 
-        let (decoded_width, decoded_height, decoded_rgba) = decode_with_png_crate(&encoded).unwrap();
+        let (decoded_width, decoded_height, decoded_rgba) =
+            decode_with_png_crate(&encoded).expect("infallible");
         prop_assert_eq!(decoded_width, width);
         prop_assert_eq!(decoded_height, height);
         prop_assert_eq!(decoded_rgba, rgba);

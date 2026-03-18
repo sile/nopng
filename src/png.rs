@@ -192,7 +192,8 @@ impl PngInfo {
         Self {
             width: header.width,
             height: header.height,
-            bit_depth: PngBitDepth::from_u8(header.bit_depth).expect("validated bit depth"),
+            bit_depth: PngBitDepth::from_u8(header.bit_depth)
+                .expect("bug: validated bit depth must map to PngBitDepth"),
             color_mode: color_mode_from_color_type(header.color_type),
             interlaced: header.interlace_method == 1,
         }
@@ -224,22 +225,22 @@ pub enum PngPixels<'a> {
     Rgba16(Cow<'a, [u16]>),
     Indexed1 {
         indices: Cow<'a, [u8]>,
-        palette: Cow<'a, [[u8; 3]]>,
+        palette: Cow<'a, [u8]>,
         trns: Option<Cow<'a, [u8]>>,
     },
     Indexed2 {
         indices: Cow<'a, [u8]>,
-        palette: Cow<'a, [[u8; 3]]>,
+        palette: Cow<'a, [u8]>,
         trns: Option<Cow<'a, [u8]>>,
     },
     Indexed4 {
         indices: Cow<'a, [u8]>,
-        palette: Cow<'a, [[u8; 3]]>,
+        palette: Cow<'a, [u8]>,
         trns: Option<Cow<'a, [u8]>>,
     },
     Indexed8 {
         indices: Cow<'a, [u8]>,
-        palette: Cow<'a, [[u8; 3]]>,
+        palette: Cow<'a, [u8]>,
         trns: Option<Cow<'a, [u8]>>,
     },
 }
@@ -292,7 +293,7 @@ impl<'a> PngPixels<'a> {
     pub fn from_indexed1<I, P, T>(indices: I, palette: P, trns: Option<T>) -> Self
     where
         I: Into<Cow<'a, [u8]>>,
-        P: Into<Cow<'a, [[u8; 3]]>>,
+        P: Into<Cow<'a, [u8]>>,
         T: Into<Cow<'a, [u8]>>,
     {
         Self::Indexed1 {
@@ -305,7 +306,7 @@ impl<'a> PngPixels<'a> {
     pub fn from_indexed2<I, P, T>(indices: I, palette: P, trns: Option<T>) -> Self
     where
         I: Into<Cow<'a, [u8]>>,
-        P: Into<Cow<'a, [[u8; 3]]>>,
+        P: Into<Cow<'a, [u8]>>,
         T: Into<Cow<'a, [u8]>>,
     {
         Self::Indexed2 {
@@ -318,7 +319,7 @@ impl<'a> PngPixels<'a> {
     pub fn from_indexed4<I, P, T>(indices: I, palette: P, trns: Option<T>) -> Self
     where
         I: Into<Cow<'a, [u8]>>,
-        P: Into<Cow<'a, [[u8; 3]]>>,
+        P: Into<Cow<'a, [u8]>>,
         T: Into<Cow<'a, [u8]>>,
     {
         Self::Indexed4 {
@@ -331,7 +332,7 @@ impl<'a> PngPixels<'a> {
     pub fn from_indexed8<I, P, T>(indices: I, palette: P, trns: Option<T>) -> Self
     where
         I: Into<Cow<'a, [u8]>>,
-        P: Into<Cow<'a, [[u8; 3]]>>,
+        P: Into<Cow<'a, [u8]>>,
         T: Into<Cow<'a, [u8]>>,
     {
         Self::Indexed8 {
@@ -424,7 +425,7 @@ impl<'a> PngPixels<'a> {
         }
     }
 
-    pub fn palette(&self) -> Option<&[[u8; 3]]> {
+    pub fn palette(&self) -> Option<&[u8]> {
         match self {
             Self::Indexed1 { palette, .. }
             | Self::Indexed2 { palette, .. }
@@ -548,7 +549,10 @@ impl<'a> PngPixels<'a> {
             Self::GrayAlpha16(data) => {
                 let (pairs, remainder) = data.as_chunks::<2>();
                 debug_assert!(remainder.is_empty());
-                pairs.iter().map(|[gray, _]| downsample_u16(*gray)).collect()
+                pairs
+                    .iter()
+                    .map(|[gray, _]| downsample_u16(*gray))
+                    .collect()
             }
             Self::Rgb8(_)
             | Self::Rgb16(_)
@@ -615,7 +619,10 @@ impl<'a> PngPixels<'a> {
             Self::Rgba8(data) => {
                 let (pixels, remainder) = data.as_chunks::<4>();
                 debug_assert!(remainder.is_empty());
-                pixels.iter().flat_map(|[r, g, b, _]| [*r, *g, *b]).collect()
+                pixels
+                    .iter()
+                    .flat_map(|[r, g, b, _]| [*r, *g, *b])
+                    .collect()
             }
             Self::Rgba16(data) => {
                 let (pixels, remainder) = data.as_chunks::<4>();
@@ -634,7 +641,10 @@ impl<'a> PngPixels<'a> {
                 let rgba = self.to_rgba8_vec();
                 let (pixels, remainder) = rgba.as_chunks::<4>();
                 debug_assert!(remainder.is_empty());
-                pixels.iter().flat_map(|[r, g, b, _]| [*r, *g, *b]).collect()
+                pixels
+                    .iter()
+                    .flat_map(|[r, g, b, _]| [*r, *g, *b])
+                    .collect()
             }
         }
     }
@@ -645,7 +655,10 @@ impl<'a> PngPixels<'a> {
             Self::Rgba16(data) => {
                 let (pixels, remainder) = data.as_chunks::<4>();
                 debug_assert!(remainder.is_empty());
-                pixels.iter().flat_map(|[r, g, b, _]| [*r, *g, *b]).collect()
+                pixels
+                    .iter()
+                    .flat_map(|[r, g, b, _]| [*r, *g, *b])
+                    .collect()
             }
             _ => self
                 .to_rgb8_vec()
@@ -934,33 +947,38 @@ fn validate_sample_range(samples: &[u8], bit_depth: u8, name: &str) -> Result<()
 
 fn validate_indexed_pixels(
     indices: &[u8],
-    palette: &[[u8; 3]],
+    palette: &[u8],
     trns: Option<&[u8]>,
     bit_depth: u8,
 ) -> Result<()> {
-    if palette.is_empty() || palette.len() > 256 {
+    if palette.is_empty() || !palette.len().is_multiple_of(3) {
+        return Err(Error::InvalidData(
+            "indexed palette length must be a non-zero multiple of 3".into(),
+        ));
+    }
+    let palette_len = palette.len() / 3;
+    if palette_len > 256 {
         return Err(Error::InvalidData(
             "indexed palette length must be in 1..=256".into(),
         ));
     }
     if let Some(trns) = trns
-        && trns.len() > palette.len()
+        && trns.len() > palette_len
     {
         return Err(Error::InvalidData(
             "indexed transparency table is longer than the palette".into(),
         ));
     }
     let capacity = 1usize << bit_depth;
-    if palette.len() > capacity {
+    if palette_len > capacity {
         return Err(Error::InvalidData(format!(
             "palette of size {} does not fit in {}-bit indexed pixels",
-            palette.len(),
-            bit_depth
+            palette_len, bit_depth
         )));
     }
     if indices
         .iter()
-        .all(|&index| usize::from(index) < palette.len())
+        .all(|&index| usize::from(index) < palette_len)
     {
         Ok(())
     } else {
@@ -996,7 +1014,8 @@ fn indexed_to_rgba8(pixels: &PngPixels<'_>) -> Vec<u8> {
     };
     let mut rgba = Vec::with_capacity(indices.len() * 4);
     for &index in indices {
-        let rgb = palette[index as usize];
+        let rgb_index = index as usize * 3;
+        let rgb = &palette[rgb_index..rgb_index + 3];
         let alpha = trns
             .and_then(|table| table.get(index as usize))
             .copied()
@@ -1004,6 +1023,14 @@ fn indexed_to_rgba8(pixels: &PngPixels<'_>) -> Vec<u8> {
         rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], alpha]);
     }
     rgba
+}
+
+fn flatten_palette(palette: &[[u8; 3]]) -> Vec<u8> {
+    let mut flattened = Vec::with_capacity(palette.len() * 3);
+    for &[r, g, b] in palette {
+        flattened.extend_from_slice(&[r, g, b]);
+    }
+    flattened
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1027,12 +1054,12 @@ impl PngHeader {
         let width = u32::from_be_bytes(
             chunk_data[0..4]
                 .try_into()
-                .expect("BUF: IHDR width must be 4 bytes"),
+                .expect("bug: IHDR width must be 4 bytes"),
         );
         let height = u32::from_be_bytes(
             chunk_data[4..8]
                 .try_into()
-                .expect("BUF: IHDR height must be 4 bytes"),
+                .expect("bug: IHDR height must be 4 bytes"),
         );
         if width == 0 || height == 0 {
             return Err(Error::InvalidData(
@@ -1380,7 +1407,7 @@ fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>> {
     let expected_adler = u32::from_be_bytes(
         data[data.len() - 4..]
             .try_into()
-            .expect("BUF: zlib trailer must be 4 bytes"),
+            .expect("bug: zlib trailer must be 4 bytes"),
     );
     let actual_adler = adler32::calculate(&decoded);
     if actual_adler != expected_adler {
@@ -1465,12 +1492,7 @@ fn convert_to_pixels(
                 let (pixels, remainder) = raw.as_chunks::<3>();
                 debug_assert!(remainder.is_empty());
                 for &[r, g, b] in pixels {
-                    let alpha = if [
-                        u16::from(r),
-                        u16::from(g),
-                        u16::from(b),
-                    ] == transparent
-                    {
+                    let alpha = if [u16::from(r), u16::from(g), u16::from(b)] == transparent {
                         0
                     } else {
                         255
@@ -1591,22 +1613,22 @@ fn convert_indexed_to_pixels(
     Ok(match header.bit_depth {
         1 => PngPixels::Indexed1 {
             indices: Cow::Owned(unpacked),
-            palette: Cow::Owned(palette.clone()),
+            palette: Cow::Owned(flatten_palette(palette)),
             trns: trns.map(Cow::Owned),
         },
         2 => PngPixels::Indexed2 {
             indices: Cow::Owned(unpacked),
-            palette: Cow::Owned(palette.clone()),
+            palette: Cow::Owned(flatten_palette(palette)),
             trns: trns.map(Cow::Owned),
         },
         4 => PngPixels::Indexed4 {
             indices: Cow::Owned(unpacked),
-            palette: Cow::Owned(palette.clone()),
+            palette: Cow::Owned(flatten_palette(palette)),
             trns: trns.map(Cow::Owned),
         },
         8 => PngPixels::Indexed8 {
             indices: Cow::Owned(unpacked),
-            palette: Cow::Owned(palette.clone()),
+            palette: Cow::Owned(flatten_palette(palette)),
             trns: trns.map(Cow::Owned),
         },
         _ => unreachable!(),
@@ -1796,11 +1818,7 @@ fn convert_to_rgba16(
             let (pixels, remainder) = raw.as_chunks::<3>();
             debug_assert!(remainder.is_empty());
             for &[r, g, b] in pixels {
-                let rgb = [
-                    u16::from(r),
-                    u16::from(g),
-                    u16::from(b),
-                ];
+                let rgb = [u16::from(r), u16::from(g), u16::from(b)];
                 let alpha = if Some(rgb) == transparent {
                     0
                 } else {
@@ -1906,7 +1924,10 @@ fn pixels_from_rgba16_source(
         (0, 16, false) => {
             let (pixels, remainder) = rgba.as_chunks::<4>();
             debug_assert!(remainder.is_empty());
-            let data = pixels.iter().map(|[gray, _, _, _]| *gray).collect::<Vec<_>>();
+            let data = pixels
+                .iter()
+                .map(|[gray, _, _, _]| *gray)
+                .collect::<Vec<_>>();
             PngPixels::Gray16(Cow::Owned(data))
         }
         (0, _, true) => {
@@ -2422,7 +2443,6 @@ fn analyze_palette(pixels: &[[u8; 4]]) -> Option<IndexedAnalysis> {
     Some(IndexedAnalysis { palette, trns })
 }
 
-
 fn build_filtered_data(
     width: u32,
     height: u32,
@@ -2541,7 +2561,10 @@ fn encode_row_into(
             }
         }
         EncodedPixelKind::Indexed => {
-            let palette = target.palette.as_ref().expect("palette");
+            let palette = target
+                .palette
+                .as_ref()
+                .expect("bug: indexed encoding target must include a palette");
             let indices = row_pixels
                 .iter()
                 .map(|pixel| {
@@ -2718,6 +2741,7 @@ fn decode_adam7_to_pixels(
                 .as_ref()
                 .ok_or_else(|| Error::InvalidData("missing PLTE for palette image".into()))?
                 .clone();
+            let flat_palette = flatten_palette(&palette);
             let trns = match ancillary.transparency.as_ref() {
                 Some(Transparency::Palette(alpha)) => Some(Cow::Owned(alpha.clone())),
                 _ => None,
@@ -2725,22 +2749,22 @@ fn decode_adam7_to_pixels(
             Ok(match header.bit_depth {
                 1 => PngPixels::Indexed1 {
                     indices: Cow::Owned(indices),
-                    palette: Cow::Owned(palette),
+                    palette: Cow::Owned(flat_palette.clone()),
                     trns,
                 },
                 2 => PngPixels::Indexed2 {
                     indices: Cow::Owned(indices),
-                    palette: Cow::Owned(palette),
+                    palette: Cow::Owned(flat_palette.clone()),
                     trns,
                 },
                 4 => PngPixels::Indexed4 {
                     indices: Cow::Owned(indices),
-                    palette: Cow::Owned(palette),
+                    palette: Cow::Owned(flat_palette.clone()),
                     trns,
                 },
                 8 => PngPixels::Indexed8 {
                     indices: Cow::Owned(indices),
-                    palette: Cow::Owned(palette),
+                    palette: Cow::Owned(flat_palette),
                     trns,
                 },
                 _ => unreachable!(),
@@ -2839,7 +2863,6 @@ fn scatter_adam7_pass16(
     }
 }
 
-
 fn adam7_axis_size(size: u32, start: u8, step: u8) -> u32 {
     if size <= u32::from(start) {
         0
@@ -2893,7 +2916,9 @@ impl<'a> Cursor<'a> {
 
     fn read_array<const N: usize>(&mut self) -> Result<[u8; N]> {
         let bytes = self.read_bytes(N)?;
-        Ok(bytes.try_into().unwrap())
+        Ok(bytes
+            .try_into()
+            .expect("bug: read_array must return exactly N bytes"))
     }
 
     fn read_bytes(&mut self, len: usize) -> Result<&'a [u8]> {
@@ -2921,12 +2946,17 @@ mod tests {
     #[test]
     fn roundtrip_rgba_writer_and_reader() {
         let pixels = PngPixels::from_rgba8(vec![255, 0, 0, 255, 0, 255, 0, 128]);
-        let image = PngImage::new(2, 1, pixels.clone(), PngEncoding::for_pixels(&pixels)).unwrap();
-        let bytes = image.to_bytes().unwrap();
-        let decoded = PngImage::from_bytes(&bytes).unwrap();
+        let image = PngImage::new(2, 1, pixels.clone(), PngEncoding::for_pixels(&pixels))
+            .expect("infallible");
+        let bytes = image.to_bytes().expect("infallible");
+        let decoded = PngImage::from_bytes(&bytes).expect("infallible");
         assert_eq!(
-            decoded.pixels().to_rgba8().as_u8_slice().unwrap(),
-            pixels.to_rgba8().as_u8_slice().unwrap()
+            decoded
+                .pixels()
+                .to_rgba8()
+                .as_u8_slice()
+                .expect("infallible"),
+            pixels.to_rgba8().as_u8_slice().expect("infallible")
         );
     }
 
@@ -2935,21 +2965,25 @@ mod tests {
         let pixels = PngPixels::from_rgba8(vec![
             255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 255, 255, 255, 0, 64,
         ]);
-        let mut image =
-            PngImage::new(4, 1, pixels.clone(), PngEncoding::for_pixels(&pixels)).unwrap();
+        let mut image = PngImage::new(4, 1, pixels.clone(), PngEncoding::for_pixels(&pixels))
+            .expect("infallible");
         *image.encoding_mut() = PngEncoding {
             color_mode: PngColorMode::Indexed,
             bit_depth: PngBitDepth::Two,
             interlaced: false,
         };
-        let bytes = image.to_bytes().unwrap();
+        let bytes = image.to_bytes().expect("infallible");
         let ihdr = read_ihdr(&bytes);
         assert_eq!(ihdr.bit_depth, 2);
         assert_eq!(ihdr.color_type, IhdrChunk::COLOR_TYPE_INDEXED);
-        let decoded = PngImage::from_bytes(&bytes).unwrap();
+        let decoded = PngImage::from_bytes(&bytes).expect("infallible");
         assert_eq!(
-            decoded.pixels().to_rgba8().as_u8_slice().unwrap(),
-            pixels.to_rgba8().as_u8_slice().unwrap()
+            decoded
+                .pixels()
+                .to_rgba8()
+                .as_u8_slice()
+                .expect("infallible"),
+            pixels.to_rgba8().as_u8_slice().expect("infallible")
         );
     }
 
@@ -2966,10 +3000,17 @@ mod tests {
                 interlaced: false,
             },
         )
-        .unwrap();
-        let bytes = image.to_bytes().unwrap();
-        let decoded = PngImage::from_bytes(&bytes).unwrap();
-        assert_eq!(decoded.pixels().to_rgb8().as_u8_slice().unwrap(), &data);
+        .expect("infallible");
+        let bytes = image.to_bytes().expect("infallible");
+        let decoded = PngImage::from_bytes(&bytes).expect("infallible");
+        assert_eq!(
+            decoded
+                .pixels()
+                .to_rgb8()
+                .as_u8_slice()
+                .expect("infallible"),
+            &data
+        );
     }
 
     #[test]
@@ -2995,11 +3036,7 @@ mod tests {
         let error = PngImage::new(
             2,
             1,
-            PngPixels::from_indexed2(
-                vec![0, 4],
-                vec![[0, 0, 0], [255, 255, 255]],
-                None::<Vec<u8>>,
-            ),
+            PngPixels::from_indexed2(vec![0, 4], vec![0, 0, 0, 255, 255, 255], None::<Vec<u8>>),
             PngEncoding {
                 color_mode: PngColorMode::Indexed,
                 bit_depth: PngBitDepth::Two,
@@ -3022,8 +3059,8 @@ mod tests {
                 interlaced: false,
             },
         )
-        .unwrap();
-        let bytes = image.to_bytes().unwrap();
+        .expect("infallible");
+        let bytes = image.to_bytes().expect("infallible");
         let ihdr = read_ihdr(&bytes);
         assert_eq!(ihdr.bit_depth, 16);
         assert_eq!(ihdr.color_type, IhdrChunk::COLOR_TYPE_RGBA);
@@ -3031,7 +3068,7 @@ mod tests {
 
     #[test]
     fn png_info_rejects_truncated_ihdr() {
-        let error = PngInfo::from_bytes(&PNG_SIGNATURE).unwrap_err();
+        let error = PngInfo::from_bytes(&PNG_SIGNATURE).expect_err("infallible");
         assert!(matches!(error, Error::InvalidData(message) if message.contains("unexpected end")));
     }
 
@@ -3041,7 +3078,7 @@ mod tests {
     }
 
     fn read_ihdr(bytes: &[u8]) -> IhdrInfo {
-        let ihdr = find_chunk(bytes, b"IHDR").unwrap();
+        let ihdr = find_chunk(bytes, b"IHDR").expect("infallible");
         IhdrInfo {
             bit_depth: ihdr[8],
             color_type: ihdr[9],
@@ -3051,9 +3088,15 @@ mod tests {
     fn find_chunk<'a>(bytes: &'a [u8], chunk_type: &[u8; 4]) -> Option<&'a [u8]> {
         let mut offset = 8;
         while offset + 12 <= bytes.len() {
-            let length = u32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+            let length = u32::from_be_bytes(
+                bytes[offset..offset + 4]
+                    .try_into()
+                    .expect("bug: chunk length must be 4 bytes"),
+            ) as usize;
             offset += 4;
-            let current_type: [u8; 4] = bytes[offset..offset + 4].try_into().unwrap();
+            let current_type: [u8; 4] = bytes[offset..offset + 4]
+                .try_into()
+                .expect("bug: chunk type must be 4 bytes");
             offset += 4;
             let data = &bytes[offset..offset + length];
             offset += length + 4;
