@@ -15,4 +15,5 @@ pub use png::PngColorMode;
 pub use png::PngEncoding;
 pub use png::PngImage;
 pub use png::PngInfo;
+pub use png::PngPixels;
 pub use png::Result;

@@ -29,22 +29,25 @@ Supported Decoding
   - Truecolor with alpha: 8/16-bit
 - `PLTE` and `tRNS`
 
-Decoded images are returned as RGBA8 via `PngImage`.
-If the source PNG is 16-bit, samples are downconverted to 8-bit when stored in `PngImage`.
+Decoded images are returned as `PngImage<'static>`.
+`PngImage` stores a `PngPixels` enum that preserves the source layout as closely as possible:
+
+- low-bit grayscale is returned as unpacked `Gray1/2/4`
+- indexed PNG is returned as `Indexed1/2/4/8`
+- `tRNS` is reflected in the pixel representation
+- 16-bit PNG is returned as native `u16`-backed pixel data
+
 Use `nopng::PngInfo::from_bytes()` if you want to inspect width, height, bit depth, or interlace mode before doing a full decode.
 
 Supported Encoding
 ------------------
 
-- Source image type: `PngImage` (`RGBA8`)
+- `PngImage<'a>` can hold borrowed or owned pixel data
+- Pixel storage is represented by `PngPixels<'a>`
 - `PngImage` stores a concrete `PngEncoding`
 - `to_bytes()` uses `image.encoding()` as-is
-- `PngEncoding::infer_from_rgba()` provides the same automatic selection used by `PngImage::new()`
-- Bit depth selection:
-  - grayscale: `1/2/4/8-bit` when exactly representable
-  - indexed-color: `1/2/4/8-bit`
-  - other color types: `8-bit`
-- `PngBitDepth::Sixteen` may appear after decoding a 16-bit PNG, but `PngImage::to_bytes()` still writes an 8-bit PNG because `PngImage` stores RGBA8 pixels
+- `PngEncoding::for_pixels()` provides a natural default for a given `PngPixels`
+- `to_bytes()` performs implicit pixel conversion when `pixels` and `encoding` do not exactly match
 
 no_std
 ------
@@ -71,6 +74,23 @@ fn convert(bytes: &[u8]) -> nopng::Result<Vec<u8>> {
         bit_depth: nopng::PngBitDepth::Four,
         interlaced: true,
     };
+    image.to_bytes()
+}
+```
+
+```rust
+fn encode_borrowed_rgb(data: &[u8]) -> nopng::Result<Vec<u8>> {
+    let pixels = nopng::PngPixels::from_rgb8(data);
+    let image = nopng::PngImage::new(
+        2,
+        1,
+        pixels,
+        nopng::PngEncoding {
+            color_mode: nopng::PngColorMode::Rgb,
+            bit_depth: nopng::PngBitDepth::Eight,
+            interlaced: false,
+        },
+    )?;
     image.to_bytes()
 }
 ```

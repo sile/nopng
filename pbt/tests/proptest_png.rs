@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use nopng::{PngBitDepth, PngColorMode, PngEncoding, PngImage};
+use nopng::{PngBitDepth, PngColorMode, PngEncoding, PngImage, PngPixels};
 use proptest::prelude::*;
 
 fn decode_with_png_crate(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), png::DecodingError> {
@@ -102,18 +102,33 @@ proptest! {
 
     #[test]
     fn roundtrip_random_rgba((width, height, rgba) in rgba_image_strategy(8, 8)) {
-        let image = PngImage::new(width, height, rgba.clone()).unwrap();
+        let pixels = PngPixels::from_rgba8(rgba.clone());
+        let image = PngImage::new(width, height, pixels, PngEncoding {
+            color_mode: PngColorMode::Rgba,
+            bit_depth: PngBitDepth::Eight,
+            interlaced: false,
+        }).unwrap();
         let encoded = image.to_bytes().unwrap();
 
         let decoded = PngImage::from_bytes(&encoded).unwrap();
+        let decoded_rgba = decoded.pixels().to_rgba8();
         prop_assert_eq!(decoded.width(), width);
         prop_assert_eq!(decoded.height(), height);
-        prop_assert_eq!(decoded.data(), rgba.as_slice());
+        prop_assert_eq!(decoded_rgba.as_u8_slice().unwrap(), rgba.as_slice());
     }
 
     #[test]
     fn encoded_png_matches_png_crate_for_grayscale((width, height, rgba) in grayscale_levels_strategy(), interlaced in any::<bool>()) {
-        let mut image = PngImage::new(width, height, rgba.clone()).unwrap();
+        let mut image = PngImage::new(
+            width,
+            height,
+            PngPixels::from_rgba8(rgba.clone()),
+            PngEncoding {
+                color_mode: PngColorMode::Rgba,
+                bit_depth: PngBitDepth::Eight,
+                interlaced: false,
+            },
+        ).unwrap();
         *image.encoding_mut() = PngEncoding {
             color_mode: PngColorMode::Grayscale,
             bit_depth: PngBitDepth::Two,
@@ -129,7 +144,16 @@ proptest! {
 
     #[test]
     fn encoded_png_matches_png_crate_for_indexed((width, height, rgba) in indexed_image_strategy(), interlaced in any::<bool>()) {
-        let mut image = PngImage::new(width, height, rgba.clone()).unwrap();
+        let mut image = PngImage::new(
+            width,
+            height,
+            PngPixels::from_rgba8(rgba.clone()),
+            PngEncoding {
+                color_mode: PngColorMode::Rgba,
+                bit_depth: PngBitDepth::Eight,
+                interlaced: false,
+            },
+        ).unwrap();
         *image.encoding_mut() = PngEncoding {
             color_mode: PngColorMode::Indexed,
             bit_depth: PngBitDepth::Four,

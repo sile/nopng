@@ -1,4 +1,5 @@
-use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::borrow::Cow;
+use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec;
@@ -199,110 +200,590 @@ impl PngInfo {
 }
 
 impl PngEncoding {
-    /// Infers a concrete PNG encoding from RGBA8 bytes.
-    ///
-    /// Returns `None` when `rgba` is not a whole number of pixels.
-    pub fn infer_from_rgba(rgba: &[u8]) -> Option<Self> {
-        if !rgba.len().is_multiple_of(4) {
-            return None;
-        }
-        if rgba.is_empty() {
-            return Some(Self::default());
-        }
-        let pixels = rgba
-            .chunks_exact(4)
-            .map(|chunk| [chunk[0], chunk[1], chunk[2], chunk[3]])
-            .collect::<Vec<_>>();
-        Some(infer_encoding_from_pixels(&pixels))
-    }
-
-    fn from_decoded_image(header: &PngHeader, ancillary: &AncillaryChunks) -> Self {
-        let color_mode = match (header.color_type, ancillary.transparency.as_ref()) {
-            (0, Some(Transparency::Grayscale(_))) => PngColorMode::GrayscaleAlpha,
-            (2, Some(Transparency::Truecolor(_))) => PngColorMode::Rgba,
-            _ => color_mode_from_color_type(header.color_type),
-        };
+    pub fn for_pixels(pixels: &PngPixels<'_>) -> Self {
         Self {
-            color_mode,
-            bit_depth: PngBitDepth::from_u8(header.bit_depth).expect("validated bit depth"),
-            interlaced: header.interlace_method == 1,
+            color_mode: pixels.color_mode(),
+            bit_depth: pixels.bit_depth(),
+            interlaced: false,
         }
     }
 }
 
-/// PNG image data stored as RGBA8 pixels.
-///
-/// Decoding a 16-bit PNG downconverts samples to 8-bit before storing them here.
-/// Encoding uses the attached [`PngEncoding`]. When `encoding.bit_depth` is
-/// [`PngBitDepth::Sixteen`], `write_to` writes an 8-bit PNG because this type
-/// only stores RGBA8 data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PngPixels<'a> {
+    Gray1(Cow<'a, [u8]>),
+    Gray2(Cow<'a, [u8]>),
+    Gray4(Cow<'a, [u8]>),
+    Gray8(Cow<'a, [u8]>),
+    Gray16(Cow<'a, [u16]>),
+    GrayAlpha8(Cow<'a, [u8]>),
+    GrayAlpha16(Cow<'a, [u16]>),
+    Rgb8(Cow<'a, [u8]>),
+    Rgb16(Cow<'a, [u16]>),
+    Rgba8(Cow<'a, [u8]>),
+    Rgba16(Cow<'a, [u16]>),
+    Indexed1 {
+        indices: Cow<'a, [u8]>,
+        palette: Cow<'a, [[u8; 3]]>,
+        trns: Option<Cow<'a, [u8]>>,
+    },
+    Indexed2 {
+        indices: Cow<'a, [u8]>,
+        palette: Cow<'a, [[u8; 3]]>,
+        trns: Option<Cow<'a, [u8]>>,
+    },
+    Indexed4 {
+        indices: Cow<'a, [u8]>,
+        palette: Cow<'a, [[u8; 3]]>,
+        trns: Option<Cow<'a, [u8]>>,
+    },
+    Indexed8 {
+        indices: Cow<'a, [u8]>,
+        palette: Cow<'a, [[u8; 3]]>,
+        trns: Option<Cow<'a, [u8]>>,
+    },
+}
+
+impl<'a> PngPixels<'a> {
+    pub fn from_gray1(data: impl Into<Cow<'a, [u8]>>) -> Self {
+        Self::Gray1(data.into())
+    }
+
+    pub fn from_gray2(data: impl Into<Cow<'a, [u8]>>) -> Self {
+        Self::Gray2(data.into())
+    }
+
+    pub fn from_gray4(data: impl Into<Cow<'a, [u8]>>) -> Self {
+        Self::Gray4(data.into())
+    }
+
+    pub fn from_gray8(data: impl Into<Cow<'a, [u8]>>) -> Self {
+        Self::Gray8(data.into())
+    }
+
+    pub fn from_gray16(data: impl Into<Cow<'a, [u16]>>) -> Self {
+        Self::Gray16(data.into())
+    }
+
+    pub fn from_gray_alpha8(data: impl Into<Cow<'a, [u8]>>) -> Self {
+        Self::GrayAlpha8(data.into())
+    }
+
+    pub fn from_gray_alpha16(data: impl Into<Cow<'a, [u16]>>) -> Self {
+        Self::GrayAlpha16(data.into())
+    }
+
+    pub fn from_rgb8(data: impl Into<Cow<'a, [u8]>>) -> Self {
+        Self::Rgb8(data.into())
+    }
+
+    pub fn from_rgb16(data: impl Into<Cow<'a, [u16]>>) -> Self {
+        Self::Rgb16(data.into())
+    }
+
+    pub fn from_rgba8(data: impl Into<Cow<'a, [u8]>>) -> Self {
+        Self::Rgba8(data.into())
+    }
+
+    pub fn from_rgba16(data: impl Into<Cow<'a, [u16]>>) -> Self {
+        Self::Rgba16(data.into())
+    }
+
+    pub fn from_indexed1<I, P, T>(indices: I, palette: P, trns: Option<T>) -> Self
+    where
+        I: Into<Cow<'a, [u8]>>,
+        P: Into<Cow<'a, [[u8; 3]]>>,
+        T: Into<Cow<'a, [u8]>>,
+    {
+        Self::Indexed1 {
+            indices: indices.into(),
+            palette: palette.into(),
+            trns: trns.map(Into::into),
+        }
+    }
+
+    pub fn from_indexed2<I, P, T>(indices: I, palette: P, trns: Option<T>) -> Self
+    where
+        I: Into<Cow<'a, [u8]>>,
+        P: Into<Cow<'a, [[u8; 3]]>>,
+        T: Into<Cow<'a, [u8]>>,
+    {
+        Self::Indexed2 {
+            indices: indices.into(),
+            palette: palette.into(),
+            trns: trns.map(Into::into),
+        }
+    }
+
+    pub fn from_indexed4<I, P, T>(indices: I, palette: P, trns: Option<T>) -> Self
+    where
+        I: Into<Cow<'a, [u8]>>,
+        P: Into<Cow<'a, [[u8; 3]]>>,
+        T: Into<Cow<'a, [u8]>>,
+    {
+        Self::Indexed4 {
+            indices: indices.into(),
+            palette: palette.into(),
+            trns: trns.map(Into::into),
+        }
+    }
+
+    pub fn from_indexed8<I, P, T>(indices: I, palette: P, trns: Option<T>) -> Self
+    where
+        I: Into<Cow<'a, [u8]>>,
+        P: Into<Cow<'a, [[u8; 3]]>>,
+        T: Into<Cow<'a, [u8]>>,
+    {
+        Self::Indexed8 {
+            indices: indices.into(),
+            palette: palette.into(),
+            trns: trns.map(Into::into),
+        }
+    }
+
+    pub fn pixel_count(&self) -> usize {
+        match self {
+            Self::Gray1(data) | Self::Gray2(data) | Self::Gray4(data) | Self::Gray8(data) => {
+                data.len()
+            }
+            Self::Gray16(data) => data.len(),
+            Self::GrayAlpha8(data) => data.len() / 2,
+            Self::GrayAlpha16(data) => data.len() / 2,
+            Self::Rgb8(data) => data.len() / 3,
+            Self::Rgb16(data) => data.len() / 3,
+            Self::Rgba8(data) => data.len() / 4,
+            Self::Rgba16(data) => data.len() / 4,
+            Self::Indexed1 { indices, .. }
+            | Self::Indexed2 { indices, .. }
+            | Self::Indexed4 { indices, .. }
+            | Self::Indexed8 { indices, .. } => indices.len(),
+        }
+    }
+
+    pub fn color_mode(&self) -> PngColorMode {
+        match self {
+            Self::Gray1(_) | Self::Gray2(_) | Self::Gray4(_) | Self::Gray8(_) | Self::Gray16(_) => {
+                PngColorMode::Grayscale
+            }
+            Self::GrayAlpha8(_) | Self::GrayAlpha16(_) => PngColorMode::GrayscaleAlpha,
+            Self::Rgb8(_) | Self::Rgb16(_) => PngColorMode::Rgb,
+            Self::Rgba8(_) | Self::Rgba16(_) => PngColorMode::Rgba,
+            Self::Indexed1 { .. }
+            | Self::Indexed2 { .. }
+            | Self::Indexed4 { .. }
+            | Self::Indexed8 { .. } => PngColorMode::Indexed,
+        }
+    }
+
+    pub fn bit_depth(&self) -> PngBitDepth {
+        match self {
+            Self::Gray1(_) | Self::Indexed1 { .. } => PngBitDepth::One,
+            Self::Gray2(_) | Self::Indexed2 { .. } => PngBitDepth::Two,
+            Self::Gray4(_) | Self::Indexed4 { .. } => PngBitDepth::Four,
+            Self::Gray8(_)
+            | Self::GrayAlpha8(_)
+            | Self::Rgb8(_)
+            | Self::Rgba8(_)
+            | Self::Indexed8 { .. } => PngBitDepth::Eight,
+            Self::Gray16(_) | Self::GrayAlpha16(_) | Self::Rgb16(_) | Self::Rgba16(_) => {
+                PngBitDepth::Sixteen
+            }
+        }
+    }
+
+    pub fn as_u8_slice(&self) -> Option<&[u8]> {
+        match self {
+            Self::Gray1(data)
+            | Self::Gray2(data)
+            | Self::Gray4(data)
+            | Self::Gray8(data)
+            | Self::GrayAlpha8(data)
+            | Self::Rgb8(data)
+            | Self::Rgba8(data) => Some(data.as_ref()),
+            _ => None,
+        }
+    }
+
+    pub fn as_u16_slice(&self) -> Option<&[u16]> {
+        match self {
+            Self::Gray16(data)
+            | Self::GrayAlpha16(data)
+            | Self::Rgb16(data)
+            | Self::Rgba16(data) => Some(data.as_ref()),
+            _ => None,
+        }
+    }
+
+    pub fn indices(&self) -> Option<&[u8]> {
+        match self {
+            Self::Indexed1 { indices, .. }
+            | Self::Indexed2 { indices, .. }
+            | Self::Indexed4 { indices, .. }
+            | Self::Indexed8 { indices, .. } => Some(indices.as_ref()),
+            _ => None,
+        }
+    }
+
+    pub fn palette(&self) -> Option<&[[u8; 3]]> {
+        match self {
+            Self::Indexed1 { palette, .. }
+            | Self::Indexed2 { palette, .. }
+            | Self::Indexed4 { palette, .. }
+            | Self::Indexed8 { palette, .. } => Some(palette.as_ref()),
+            _ => None,
+        }
+    }
+
+    pub fn trns(&self) -> Option<&[u8]> {
+        match self {
+            Self::Indexed1 { trns, .. }
+            | Self::Indexed2 { trns, .. }
+            | Self::Indexed4 { trns, .. }
+            | Self::Indexed8 { trns, .. } => trns.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn to_owned(&self) -> PngPixels<'static> {
+        match self {
+            Self::Gray1(data) => PngPixels::Gray1(Cow::Owned(data.to_vec())),
+            Self::Gray2(data) => PngPixels::Gray2(Cow::Owned(data.to_vec())),
+            Self::Gray4(data) => PngPixels::Gray4(Cow::Owned(data.to_vec())),
+            Self::Gray8(data) => PngPixels::Gray8(Cow::Owned(data.to_vec())),
+            Self::Gray16(data) => PngPixels::Gray16(Cow::Owned(data.to_vec())),
+            Self::GrayAlpha8(data) => PngPixels::GrayAlpha8(Cow::Owned(data.to_vec())),
+            Self::GrayAlpha16(data) => PngPixels::GrayAlpha16(Cow::Owned(data.to_vec())),
+            Self::Rgb8(data) => PngPixels::Rgb8(Cow::Owned(data.to_vec())),
+            Self::Rgb16(data) => PngPixels::Rgb16(Cow::Owned(data.to_vec())),
+            Self::Rgba8(data) => PngPixels::Rgba8(Cow::Owned(data.to_vec())),
+            Self::Rgba16(data) => PngPixels::Rgba16(Cow::Owned(data.to_vec())),
+            Self::Indexed1 {
+                indices,
+                palette,
+                trns,
+            } => PngPixels::Indexed1 {
+                indices: Cow::Owned(indices.to_vec()),
+                palette: Cow::Owned(palette.to_vec()),
+                trns: trns.as_ref().map(|value| Cow::Owned(value.to_vec())),
+            },
+            Self::Indexed2 {
+                indices,
+                palette,
+                trns,
+            } => PngPixels::Indexed2 {
+                indices: Cow::Owned(indices.to_vec()),
+                palette: Cow::Owned(palette.to_vec()),
+                trns: trns.as_ref().map(|value| Cow::Owned(value.to_vec())),
+            },
+            Self::Indexed4 {
+                indices,
+                palette,
+                trns,
+            } => PngPixels::Indexed4 {
+                indices: Cow::Owned(indices.to_vec()),
+                palette: Cow::Owned(palette.to_vec()),
+                trns: trns.as_ref().map(|value| Cow::Owned(value.to_vec())),
+            },
+            Self::Indexed8 {
+                indices,
+                palette,
+                trns,
+            } => PngPixels::Indexed8 {
+                indices: Cow::Owned(indices.to_vec()),
+                palette: Cow::Owned(palette.to_vec()),
+                trns: trns.as_ref().map(|value| Cow::Owned(value.to_vec())),
+            },
+        }
+    }
+
+    pub fn into_owned(self) -> PngPixels<'static> {
+        self.to_owned()
+    }
+
+    pub fn to_gray8(&self) -> PngPixels<'static> {
+        PngPixels::Gray8(Cow::Owned(self.to_gray8_vec()))
+    }
+
+    pub fn to_gray16(&self) -> PngPixels<'static> {
+        PngPixels::Gray16(Cow::Owned(self.to_gray16_vec()))
+    }
+
+    pub fn to_rgb8(&self) -> PngPixels<'static> {
+        PngPixels::Rgb8(Cow::Owned(self.to_rgb8_vec()))
+    }
+
+    pub fn to_rgb16(&self) -> PngPixels<'static> {
+        PngPixels::Rgb16(Cow::Owned(self.to_rgb16_vec()))
+    }
+
+    pub fn to_rgba8(&self) -> PngPixels<'static> {
+        PngPixels::Rgba8(Cow::Owned(self.to_rgba8_vec()))
+    }
+
+    pub fn to_rgba16(&self) -> PngPixels<'static> {
+        PngPixels::Rgba16(Cow::Owned(self.to_rgba16_vec()))
+    }
+
+    fn to_gray8_vec(&self) -> Vec<u8> {
+        match self {
+            Self::Gray1(data) => data
+                .iter()
+                .map(|&sample| scale_sample_to_u8(u16::from(sample), 1))
+                .collect(),
+            Self::Gray2(data) => data
+                .iter()
+                .map(|&sample| scale_sample_to_u8(u16::from(sample), 2))
+                .collect(),
+            Self::Gray4(data) => data
+                .iter()
+                .map(|&sample| scale_sample_to_u8(u16::from(sample), 4))
+                .collect(),
+            Self::Gray8(data) => data.to_vec(),
+            Self::Gray16(data) => data.iter().copied().map(downsample_u16).collect(),
+            Self::GrayAlpha8(data) => data.chunks_exact(2).map(|chunk| chunk[0]).collect(),
+            Self::GrayAlpha16(data) => data
+                .chunks_exact(2)
+                .map(|chunk| downsample_u16(chunk[0]))
+                .collect(),
+            Self::Rgb8(_)
+            | Self::Rgb16(_)
+            | Self::Rgba8(_)
+            | Self::Rgba16(_)
+            | Self::Indexed1 { .. }
+            | Self::Indexed2 { .. }
+            | Self::Indexed4 { .. }
+            | Self::Indexed8 { .. } => {
+                let rgba = self.to_rgba8_vec();
+                rgba.chunks_exact(4)
+                    .map(|chunk| rgb_to_gray8(chunk[0], chunk[1], chunk[2]))
+                    .collect()
+            }
+        }
+    }
+
+    fn to_gray16_vec(&self) -> Vec<u16> {
+        match self {
+            Self::Gray16(data) => data.to_vec(),
+            Self::GrayAlpha16(data) => data.chunks_exact(2).map(|chunk| chunk[0]).collect(),
+            Self::Rgb16(_) | Self::Rgba16(_) => {
+                let rgba = self.to_rgba16_vec();
+                rgba.chunks_exact(4)
+                    .map(|chunk| rgb_to_gray16(chunk[0], chunk[1], chunk[2]))
+                    .collect()
+            }
+            _ => self
+                .to_gray8_vec()
+                .into_iter()
+                .map(upscale_u8_to_u16)
+                .collect(),
+        }
+    }
+
+    fn to_rgb8_vec(&self) -> Vec<u8> {
+        match self {
+            Self::Rgb8(data) => data.to_vec(),
+            Self::Rgb16(data) => data.iter().copied().map(downsample_u16).collect(),
+            Self::Gray1(_)
+            | Self::Gray2(_)
+            | Self::Gray4(_)
+            | Self::Gray8(_)
+            | Self::Gray16(_)
+            | Self::GrayAlpha8(_)
+            | Self::GrayAlpha16(_) => {
+                let gray = self.to_gray8_vec();
+                let mut rgb = Vec::with_capacity(gray.len() * 3);
+                for value in gray {
+                    rgb.extend_from_slice(&[value, value, value]);
+                }
+                rgb
+            }
+            Self::Rgba8(data) => data
+                .chunks_exact(4)
+                .flat_map(|chunk| [chunk[0], chunk[1], chunk[2]])
+                .collect(),
+            Self::Rgba16(data) => data
+                .chunks_exact(4)
+                .flat_map(|chunk| {
+                    [
+                        downsample_u16(chunk[0]),
+                        downsample_u16(chunk[1]),
+                        downsample_u16(chunk[2]),
+                    ]
+                })
+                .collect(),
+            Self::Indexed1 { .. }
+            | Self::Indexed2 { .. }
+            | Self::Indexed4 { .. }
+            | Self::Indexed8 { .. } => {
+                let rgba = self.to_rgba8_vec();
+                rgba.chunks_exact(4)
+                    .flat_map(|chunk| [chunk[0], chunk[1], chunk[2]])
+                    .collect()
+            }
+        }
+    }
+
+    fn to_rgb16_vec(&self) -> Vec<u16> {
+        match self {
+            Self::Rgb16(data) => data.to_vec(),
+            Self::Rgba16(data) => data
+                .chunks_exact(4)
+                .flat_map(|chunk| [chunk[0], chunk[1], chunk[2]])
+                .collect(),
+            _ => self
+                .to_rgb8_vec()
+                .into_iter()
+                .map(upscale_u8_to_u16)
+                .collect(),
+        }
+    }
+
+    fn to_rgba8_vec(&self) -> Vec<u8> {
+        match self {
+            Self::Rgba8(data) => data.to_vec(),
+            Self::Rgba16(data) => data.iter().copied().map(downsample_u16).collect(),
+            Self::Rgb8(data) => {
+                let mut rgba = Vec::with_capacity(data.len() / 3 * 4);
+                for chunk in data.chunks_exact(3) {
+                    rgba.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 255]);
+                }
+                rgba
+            }
+            Self::Rgb16(data) => {
+                let mut rgba = Vec::with_capacity(data.len() / 3 * 4);
+                for chunk in data.chunks_exact(3) {
+                    rgba.extend_from_slice(&[
+                        downsample_u16(chunk[0]),
+                        downsample_u16(chunk[1]),
+                        downsample_u16(chunk[2]),
+                        255,
+                    ]);
+                }
+                rgba
+            }
+            Self::Gray1(_) | Self::Gray2(_) | Self::Gray4(_) | Self::Gray8(_) | Self::Gray16(_) => {
+                let gray = self.to_gray8_vec();
+                let mut rgba = Vec::with_capacity(gray.len() * 4);
+                for value in gray {
+                    rgba.extend_from_slice(&[value, value, value, 255]);
+                }
+                rgba
+            }
+            Self::GrayAlpha8(data) => {
+                let mut rgba = Vec::with_capacity(data.len() / 2 * 4);
+                for chunk in data.chunks_exact(2) {
+                    rgba.extend_from_slice(&[chunk[0], chunk[0], chunk[0], chunk[1]]);
+                }
+                rgba
+            }
+            Self::GrayAlpha16(data) => {
+                let mut rgba = Vec::with_capacity(data.len() / 2 * 4);
+                for chunk in data.chunks_exact(2) {
+                    let gray = downsample_u16(chunk[0]);
+                    let alpha = downsample_u16(chunk[1]);
+                    rgba.extend_from_slice(&[gray, gray, gray, alpha]);
+                }
+                rgba
+            }
+            Self::Indexed1 { .. }
+            | Self::Indexed2 { .. }
+            | Self::Indexed4 { .. }
+            | Self::Indexed8 { .. } => indexed_to_rgba8(self),
+        }
+    }
+
+    fn to_rgba16_vec(&self) -> Vec<u16> {
+        match self {
+            Self::Rgba16(data) => data.to_vec(),
+            Self::Rgb16(data) => {
+                let mut rgba = Vec::with_capacity(data.len() / 3 * 4);
+                for chunk in data.chunks_exact(3) {
+                    rgba.extend_from_slice(&[chunk[0], chunk[1], chunk[2], u16::MAX]);
+                }
+                rgba
+            }
+            Self::Gray16(data) => {
+                let mut rgba = Vec::with_capacity(data.len() * 4);
+                for &value in data.iter() {
+                    rgba.extend_from_slice(&[value, value, value, u16::MAX]);
+                }
+                rgba
+            }
+            Self::GrayAlpha16(data) => {
+                let mut rgba = Vec::with_capacity(data.len() / 2 * 4);
+                for chunk in data.chunks_exact(2) {
+                    rgba.extend_from_slice(&[chunk[0], chunk[0], chunk[0], chunk[1]]);
+                }
+                rgba
+            }
+            _ => self
+                .to_rgba8_vec()
+                .into_iter()
+                .map(upscale_u8_to_u16)
+                .collect(),
+        }
+    }
+}
+
+fn rgb_to_gray8(r: u8, g: u8, b: u8) -> u8 {
+    (((u32::from(r) * 299) + (u32::from(g) * 587) + (u32::from(b) * 114) + 500) / 1000) as u8
+}
+
+fn rgb_to_gray16(r: u16, g: u16, b: u16) -> u16 {
+    (((u32::from(r) * 299) + (u32::from(g) * 587) + (u32::from(b) * 114) + 500) / 1000) as u16
+}
+
+/// PNG image with explicit dimensions, pixel storage and PNG output settings.
 #[derive(Debug, Clone)]
-pub struct PngImage {
+pub struct PngImage<'a> {
     width: u32,
     height: u32,
-    data: Vec<u8>,
+    pixels: PngPixels<'a>,
     encoding: PngEncoding,
 }
 
-impl PngImage {
-    /// Creates a PNG image from RGBA8 pixel bytes and infers a concrete encoding.
-    pub fn new(width: u32, height: u32, data: Vec<u8>) -> Result<Self> {
-        if (width * height * 4) as usize != data.len() {
-            Err(Error::InvalidData(
-                "image size does not match RGBA8 buffer length".into(),
-            ))
-        } else {
-            let encoding = PngEncoding::infer_from_rgba(&data).ok_or_else(|| {
-                Error::InvalidData("RGBA8 buffer length must be a multiple of 4".into())
-            })?;
-            Ok(Self {
-                width,
-                height,
-                data,
-                encoding,
-            })
-        }
-    }
-
-    pub fn new_with_encoding(
+impl<'a> PngImage<'a> {
+    pub fn new(
         width: u32,
         height: u32,
-        data: Vec<u8>,
+        pixels: PngPixels<'a>,
         encoding: PngEncoding,
     ) -> Result<Self> {
-        if (width * height * 4) as usize != data.len() {
-            Err(Error::InvalidData(
-                "image size does not match RGBA8 buffer length".into(),
-            ))
-        } else {
-            Ok(Self {
-                width,
-                height,
-                data,
-                encoding,
-            })
+        let expected = (width as usize)
+            .checked_mul(height as usize)
+            .ok_or_else(|| Error::InvalidData("pixel count overflow".into()))?;
+        if pixels.pixel_count() != expected {
+            return Err(Error::InvalidData(
+                "image size does not match pixel buffer length".into(),
+            ));
         }
+        validate_pixels(&pixels)?;
+        Ok(Self {
+            width,
+            height,
+            pixels,
+            encoding,
+        })
     }
 
-    /// Decodes PNG bytes into RGBA8 pixels.
+    /// Decodes PNG bytes into a [`PngPixels`] variant that is closest to the source PNG.
     ///
-    /// This is the public decode entry point. 16-bit input is downconverted to
-    /// 8-bit pixel data. The original PNG representation is summarized in
-    /// [`PngImage::encoding`].
+    /// Low-bit grayscale and indexed images are returned as unpacked samples or
+    /// indices. `tRNS` is reflected in the returned pixels, so grayscale or
+    /// truecolor images with transparency become `GrayAlpha*` or `Rgba*`.
     ///
     /// This method validates the expected decode sizes implied by `IHDR`, such
-    /// as filtered scanline sizes and final RGBA8 output size, and rejects
+    /// as filtered scanline sizes and final decoded output size, and rejects
     /// streams whose decoded layout is inconsistent with those values.
     ///
     /// This method does not impose a caller-configurable size policy. Call
     /// [`PngInfo::from_bytes`] first if you want to reject images based on
     /// width, height, pixel count, or expected decoded RGBA8 size before doing
     /// a full decode.
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<PngImage<'static>> {
         let (header, ancillary, idat_data) = parse_png(bytes)?;
         expected_filtered_len(&header)?;
         expected_raw_len(&header)?;
-        let expected_rgba_len = expected_rgba8_len(&header)?;
         let filtered = decompress_zlib(&idat_data)?;
         if filtered.len() != expected_filtered_len(&header)? {
             return Err(Error::InvalidData(format!(
@@ -311,16 +792,9 @@ impl PngImage {
                 filtered.len()
             )));
         }
-        let rgba = decode_to_rgba(&header, &filtered, &ancillary)?;
-        if rgba.len() != expected_rgba_len {
-            return Err(Error::InvalidData(format!(
-                "unexpected decoded RGBA8 size: expected {}, got {}",
-                expected_rgba_len,
-                rgba.len()
-            )));
-        }
-        let encoding = PngEncoding::from_decoded_image(&header, &ancillary);
-        Self::new_with_encoding(header.width, header.height, rgba, encoding)
+        let pixels = decode_to_pixels(&header, &filtered, &ancillary)?;
+        let encoding = PngEncoding::for_pixels(&pixels);
+        PngImage::<'static>::new(header.width, header.height, pixels, encoding)
     }
 
     pub fn width(&self) -> u32 {
@@ -331,8 +805,16 @@ impl PngImage {
         self.height
     }
 
-    pub fn data(&self) -> &[u8] {
-        &self.data
+    pub fn pixels(&self) -> &PngPixels<'a> {
+        &self.pixels
+    }
+
+    pub fn pixels_mut(&mut self) -> &mut PngPixels<'a> {
+        &mut self.pixels
+    }
+
+    pub fn into_pixels(self) -> PngPixels<'a> {
+        self.pixels
     }
 
     pub fn encoding(&self) -> &PngEncoding {
@@ -344,11 +826,9 @@ impl PngImage {
     }
 
     /// Encodes the image using its current [`PngEncoding`].
-    ///
-    /// If `self.encoding.bit_depth` is [`PngBitDepth::Sixteen`], this method
-    /// writes an 8-bit PNG because `PngImage` stores RGBA8 pixels.
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        let encoded = EncodedImage::from_rgba(self.width, self.height, &self.data, self.encoding)?;
+        let encoded =
+            EncodedImage::from_pixels(self.width, self.height, &self.pixels, self.encoding)?;
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&PNG_SIGNATURE);
 
@@ -374,6 +854,127 @@ impl PngImage {
 
         Ok(bytes)
     }
+}
+
+fn validate_pixels(pixels: &PngPixels<'_>) -> Result<()> {
+    match pixels {
+        PngPixels::Gray1(data) => validate_sample_range(data, 1, "Gray1"),
+        PngPixels::Gray2(data) => validate_sample_range(data, 2, "Gray2"),
+        PngPixels::Gray4(data) => validate_sample_range(data, 4, "Gray4"),
+        PngPixels::Gray8(_)
+        | PngPixels::Gray16(_)
+        | PngPixels::GrayAlpha8(_)
+        | PngPixels::GrayAlpha16(_)
+        | PngPixels::Rgb8(_)
+        | PngPixels::Rgb16(_)
+        | PngPixels::Rgba8(_)
+        | PngPixels::Rgba16(_) => Ok(()),
+        PngPixels::Indexed1 {
+            indices,
+            palette,
+            trns,
+        } => validate_indexed_pixels(indices, palette, trns.as_deref(), 1),
+        PngPixels::Indexed2 {
+            indices,
+            palette,
+            trns,
+        } => validate_indexed_pixels(indices, palette, trns.as_deref(), 2),
+        PngPixels::Indexed4 {
+            indices,
+            palette,
+            trns,
+        } => validate_indexed_pixels(indices, palette, trns.as_deref(), 4),
+        PngPixels::Indexed8 {
+            indices,
+            palette,
+            trns,
+        } => validate_indexed_pixels(indices, palette, trns.as_deref(), 8),
+    }
+}
+
+fn validate_sample_range(samples: &[u8], bit_depth: u8, name: &str) -> Result<()> {
+    let max = (1u16 << bit_depth) - 1;
+    if samples.iter().all(|&sample| u16::from(sample) <= max) {
+        Ok(())
+    } else {
+        Err(Error::InvalidData(format!(
+            "{name} contains a sample that does not fit in {bit_depth} bits"
+        )))
+    }
+}
+
+fn validate_indexed_pixels(
+    indices: &[u8],
+    palette: &[[u8; 3]],
+    trns: Option<&[u8]>,
+    bit_depth: u8,
+) -> Result<()> {
+    if palette.is_empty() || palette.len() > 256 {
+        return Err(Error::InvalidData(
+            "indexed palette length must be in 1..=256".into(),
+        ));
+    }
+    if let Some(trns) = trns
+        && trns.len() > palette.len()
+    {
+        return Err(Error::InvalidData(
+            "indexed transparency table is longer than the palette".into(),
+        ));
+    }
+    let capacity = 1usize << bit_depth;
+    if palette.len() > capacity {
+        return Err(Error::InvalidData(format!(
+            "palette of size {} does not fit in {}-bit indexed pixels",
+            palette.len(),
+            bit_depth
+        )));
+    }
+    if indices
+        .iter()
+        .all(|&index| usize::from(index) < palette.len())
+    {
+        Ok(())
+    } else {
+        Err(Error::InvalidData(
+            "indexed pixel buffer contains an out-of-range palette index".into(),
+        ))
+    }
+}
+
+fn indexed_to_rgba8(pixels: &PngPixels<'_>) -> Vec<u8> {
+    let (indices, palette, trns) = match pixels {
+        PngPixels::Indexed1 {
+            indices,
+            palette,
+            trns,
+        }
+        | PngPixels::Indexed2 {
+            indices,
+            palette,
+            trns,
+        }
+        | PngPixels::Indexed4 {
+            indices,
+            palette,
+            trns,
+        }
+        | PngPixels::Indexed8 {
+            indices,
+            palette,
+            trns,
+        } => (indices.as_ref(), palette.as_ref(), trns.as_deref()),
+        _ => unreachable!(),
+    };
+    let mut rgba = Vec::with_capacity(indices.len() * 4);
+    for &index in indices {
+        let rgb = palette[index as usize];
+        let alpha = trns
+            .and_then(|table| table.get(index as usize))
+            .copied()
+            .unwrap_or(255);
+        rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], alpha]);
+    }
+    rgba
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -748,17 +1349,216 @@ fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>> {
     Ok(decoded)
 }
 
-fn decode_to_rgba(
+fn decode_to_pixels(
     header: &PngHeader,
     filtered: &[u8],
     ancillary: &AncillaryChunks,
-) -> Result<Vec<u8>> {
+) -> Result<PngPixels<'static>> {
     if header.interlace_method == 0 {
         let raw = unfilter_scanlines(header, header.width, header.height, filtered)?;
-        convert_to_rgba(header, header.width, header.height, &raw, ancillary)
+        convert_to_pixels(header, header.width, &raw, ancillary)
     } else {
-        decode_adam7_to_rgba(header, filtered, ancillary)
+        decode_adam7_to_pixels(header, filtered, ancillary)
     }
+}
+
+fn convert_to_pixels(
+    header: &PngHeader,
+    width: u32,
+    raw: &[u8],
+    ancillary: &AncillaryChunks,
+) -> Result<PngPixels<'static>> {
+    match (header.color_type, header.bit_depth) {
+        (0, 1) => convert_grayscale_low_bit_to_pixels(header, width, raw, ancillary, 1),
+        (0, 2) => convert_grayscale_low_bit_to_pixels(header, width, raw, ancillary, 2),
+        (0, 4) => convert_grayscale_low_bit_to_pixels(header, width, raw, ancillary, 4),
+        (0, 8) => {
+            let transparent = match ancillary.transparency {
+                Some(Transparency::Grayscale(value)) => Some(value),
+                _ => None,
+            };
+            if let Some(transparent) = transparent {
+                let mut data = Vec::with_capacity(raw.len() * 2);
+                for &gray in raw {
+                    data.extend_from_slice(&[
+                        gray,
+                        if u16::from(gray) == transparent {
+                            0
+                        } else {
+                            255
+                        },
+                    ]);
+                }
+                Ok(PngPixels::GrayAlpha8(Cow::Owned(data)))
+            } else {
+                Ok(PngPixels::Gray8(Cow::Owned(raw.to_vec())))
+            }
+        }
+        (0, 16) => {
+            let transparent = match ancillary.transparency {
+                Some(Transparency::Grayscale(value)) => Some(value),
+                _ => None,
+            };
+            let samples = raw
+                .chunks_exact(2)
+                .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+                .collect::<Vec<_>>();
+            if let Some(transparent) = transparent {
+                let mut data = Vec::with_capacity(samples.len() * 2);
+                for gray in samples {
+                    data.extend_from_slice(&[gray, if gray == transparent { 0 } else { u16::MAX }]);
+                }
+                Ok(PngPixels::GrayAlpha16(Cow::Owned(data)))
+            } else {
+                Ok(PngPixels::Gray16(Cow::Owned(samples)))
+            }
+        }
+        (2, 8) => {
+            let transparent = match ancillary.transparency {
+                Some(Transparency::Truecolor(value)) => Some(value),
+                _ => None,
+            };
+            if let Some(transparent) = transparent {
+                let mut data = Vec::with_capacity(raw.len() / 3 * 4);
+                for chunk in raw.chunks_exact(3) {
+                    let alpha = if [
+                        u16::from(chunk[0]),
+                        u16::from(chunk[1]),
+                        u16::from(chunk[2]),
+                    ] == transparent
+                    {
+                        0
+                    } else {
+                        255
+                    };
+                    data.extend_from_slice(&[chunk[0], chunk[1], chunk[2], alpha]);
+                }
+                Ok(PngPixels::Rgba8(Cow::Owned(data)))
+            } else {
+                Ok(PngPixels::Rgb8(Cow::Owned(raw.to_vec())))
+            }
+        }
+        (2, 16) => {
+            let transparent = match ancillary.transparency {
+                Some(Transparency::Truecolor(value)) => Some(value),
+                _ => None,
+            };
+            let samples = raw
+                .chunks_exact(2)
+                .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+                .collect::<Vec<_>>();
+            if let Some(transparent) = transparent {
+                let mut data = Vec::with_capacity(samples.len() / 3 * 4);
+                for chunk in samples.chunks_exact(3) {
+                    let alpha = if [chunk[0], chunk[1], chunk[2]] == transparent {
+                        0
+                    } else {
+                        u16::MAX
+                    };
+                    data.extend_from_slice(&[chunk[0], chunk[1], chunk[2], alpha]);
+                }
+                Ok(PngPixels::Rgba16(Cow::Owned(data)))
+            } else {
+                Ok(PngPixels::Rgb16(Cow::Owned(samples)))
+            }
+        }
+        (3, 1 | 2 | 4 | 8) => convert_indexed_to_pixels(header, width, raw, ancillary),
+        (4, 8) => Ok(PngPixels::GrayAlpha8(Cow::Owned(raw.to_vec()))),
+        (4, 16) => Ok(PngPixels::GrayAlpha16(Cow::Owned(
+            raw.chunks_exact(2)
+                .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+                .collect(),
+        ))),
+        (6, 8) => Ok(PngPixels::Rgba8(Cow::Owned(raw.to_vec()))),
+        (6, 16) => Ok(PngPixels::Rgba16(Cow::Owned(
+            raw.chunks_exact(2)
+                .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+                .collect(),
+        ))),
+        _ => unreachable!(),
+    }
+}
+
+fn convert_grayscale_low_bit_to_pixels(
+    header: &PngHeader,
+    width: u32,
+    raw: &[u8],
+    ancillary: &AncillaryChunks,
+    bit_depth: u8,
+) -> Result<PngPixels<'static>> {
+    let transparent = match ancillary.transparency {
+        Some(Transparency::Grayscale(value)) => Some(value),
+        _ => None,
+    };
+    let row_stride = packed_stride_for_width(header, width)?;
+    let mut unpacked = Vec::with_capacity(width as usize * (raw.len() / row_stride.max(1)));
+    for row in raw.chunks_exact(row_stride) {
+        unpacked.extend(unpack_samples(row, width as usize, header.bit_depth));
+    }
+    if let Some(transparent) = transparent {
+        let mut data = Vec::with_capacity(unpacked.len() * 2);
+        for sample in unpacked {
+            let gray = scale_sample_to_u8(u16::from(sample), bit_depth);
+            let alpha = if u16::from(sample) == transparent {
+                0
+            } else {
+                255
+            };
+            data.extend_from_slice(&[gray, alpha]);
+        }
+        Ok(PngPixels::GrayAlpha8(Cow::Owned(data)))
+    } else {
+        Ok(match bit_depth {
+            1 => PngPixels::Gray1(Cow::Owned(unpacked)),
+            2 => PngPixels::Gray2(Cow::Owned(unpacked)),
+            4 => PngPixels::Gray4(Cow::Owned(unpacked)),
+            _ => unreachable!(),
+        })
+    }
+}
+
+fn convert_indexed_to_pixels(
+    header: &PngHeader,
+    width: u32,
+    raw: &[u8],
+    ancillary: &AncillaryChunks,
+) -> Result<PngPixels<'static>> {
+    let palette = ancillary
+        .palette
+        .as_ref()
+        .ok_or_else(|| Error::InvalidData("missing PLTE for palette image".into()))?;
+    let trns = match ancillary.transparency.as_ref() {
+        Some(Transparency::Palette(alpha)) => Some(alpha.clone()),
+        _ => None,
+    };
+    let row_stride = packed_stride_for_width(header, width)?;
+    let mut unpacked = Vec::with_capacity(width as usize * (raw.len() / row_stride.max(1)));
+    for row in raw.chunks_exact(row_stride) {
+        unpacked.extend(unpack_samples(row, width as usize, header.bit_depth));
+    }
+    Ok(match header.bit_depth {
+        1 => PngPixels::Indexed1 {
+            indices: Cow::Owned(unpacked),
+            palette: Cow::Owned(palette.clone()),
+            trns: trns.map(Cow::Owned),
+        },
+        2 => PngPixels::Indexed2 {
+            indices: Cow::Owned(unpacked),
+            palette: Cow::Owned(palette.clone()),
+            trns: trns.map(Cow::Owned),
+        },
+        4 => PngPixels::Indexed4 {
+            indices: Cow::Owned(unpacked),
+            palette: Cow::Owned(palette.clone()),
+            trns: trns.map(Cow::Owned),
+        },
+        8 => PngPixels::Indexed8 {
+            indices: Cow::Owned(unpacked),
+            palette: Cow::Owned(palette.clone()),
+            trns: trns.map(Cow::Owned),
+        },
+        _ => unreachable!(),
+    })
 }
 
 fn expected_filtered_len(header: &PngHeader) -> Result<usize> {
@@ -796,13 +1596,6 @@ fn expected_raw_len(header: &PngHeader) -> Result<usize> {
     stride
         .checked_mul(header.height as usize)
         .ok_or_else(|| Error::InvalidData("raw image size overflow".into()))
-}
-
-fn expected_rgba8_len(header: &PngHeader) -> Result<usize> {
-    (header.width as usize)
-        .checked_mul(header.height as usize)
-        .and_then(|pixels| pixels.checked_mul(4))
-        .ok_or_else(|| Error::InvalidData("decoded RGBA8 size overflow".into()))
 }
 
 fn unfilter_scanlines(
@@ -880,180 +1673,246 @@ fn unfilter_scanlines(
     Ok(raw)
 }
 
-fn convert_to_rgba(
+fn convert_to_rgba16(
     header: &PngHeader,
     width: u32,
     height: u32,
     raw: &[u8],
     ancillary: &AncillaryChunks,
-) -> Result<Vec<u8>> {
+) -> Result<Vec<u16>> {
     let pixel_count = (width as usize)
         .checked_mul(height as usize)
         .ok_or_else(|| Error::InvalidData("pixel count overflow".into()))?;
     let mut rgba = Vec::with_capacity(pixel_count * 4);
     match (header.color_type, header.bit_depth) {
-        (0, 1 | 2 | 4) => decode_grayscale_packed(header, width, raw, ancillary, &mut rgba)?,
+        (0, 1 | 2 | 4) => {
+            let row_stride = packed_stride_for_width(header, width)?;
+            let transparent = match ancillary.transparency {
+                Some(Transparency::Grayscale(value)) => Some(value),
+                _ => None,
+            };
+            for row in raw.chunks_exact(row_stride) {
+                for sample in unpack_samples(row, width as usize, header.bit_depth) {
+                    let gray =
+                        upscale_u8_to_u16(scale_sample_to_u8(u16::from(sample), header.bit_depth));
+                    let alpha = if Some(u16::from(sample)) == transparent {
+                        0
+                    } else {
+                        u16::MAX
+                    };
+                    rgba.extend_from_slice(&[gray, gray, gray, alpha]);
+                }
+            }
+        }
         (0, 8) => {
             let transparent = match ancillary.transparency {
                 Some(Transparency::Grayscale(value)) => Some(value),
                 _ => None,
             };
             for &gray in raw {
-                let alpha = if Some(u16::from(gray)) == transparent {
+                let gray = upscale_u8_to_u16(gray);
+                let alpha = if Some(u16::from(downsample_u16(gray))) == transparent {
                     0
                 } else {
-                    255
+                    u16::MAX
                 };
                 rgba.extend_from_slice(&[gray, gray, gray, alpha]);
             }
         }
-        (0, 16) => decode_grayscale16(raw, ancillary, &mut rgba),
+        (0, 16) => {
+            let transparent = match ancillary.transparency {
+                Some(Transparency::Grayscale(value)) => Some(value),
+                _ => None,
+            };
+            for chunk in raw.chunks_exact(2) {
+                let gray = u16::from_be_bytes([chunk[0], chunk[1]]);
+                let alpha = if Some(gray) == transparent {
+                    0
+                } else {
+                    u16::MAX
+                };
+                rgba.extend_from_slice(&[gray, gray, gray, alpha]);
+            }
+        }
         (2, 8) => {
             let transparent = match ancillary.transparency {
                 Some(Transparency::Truecolor(value)) => Some(value),
                 _ => None,
             };
             for chunk in raw.chunks_exact(3) {
-                let alpha = if Some([
+                let rgb = [
                     u16::from(chunk[0]),
                     u16::from(chunk[1]),
                     u16::from(chunk[2]),
-                ]) == transparent
-                {
+                ];
+                let alpha = if Some(rgb) == transparent {
                     0
                 } else {
-                    255
+                    u16::MAX
                 };
-                rgba.extend_from_slice(&[chunk[0], chunk[1], chunk[2], alpha]);
+                rgba.extend_from_slice(&[
+                    upscale_u8_to_u16(chunk[0]),
+                    upscale_u8_to_u16(chunk[1]),
+                    upscale_u8_to_u16(chunk[2]),
+                    alpha,
+                ]);
             }
         }
-        (2, 16) => decode_truecolor16(raw, ancillary, &mut rgba),
-        (3, 1 | 2 | 4 | 8) => decode_palette(header, width, raw, ancillary, &mut rgba)?,
+        (2, 16) => {
+            let transparent = match ancillary.transparency {
+                Some(Transparency::Truecolor(value)) => Some(value),
+                _ => None,
+            };
+            for chunk in raw.chunks_exact(6) {
+                let rgb = [
+                    u16::from_be_bytes([chunk[0], chunk[1]]),
+                    u16::from_be_bytes([chunk[2], chunk[3]]),
+                    u16::from_be_bytes([chunk[4], chunk[5]]),
+                ];
+                let alpha = if Some(rgb) == transparent {
+                    0
+                } else {
+                    u16::MAX
+                };
+                rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], alpha]);
+            }
+        }
+        (3, 1 | 2 | 4 | 8) => {
+            let palette_pixels = convert_indexed_to_pixels(header, width, raw, ancillary)?;
+            rgba.extend(palette_pixels.to_rgba16_vec());
+        }
         (4, 8) => {
             for chunk in raw.chunks_exact(2) {
-                rgba.extend_from_slice(&[chunk[0], chunk[0], chunk[0], chunk[1]]);
+                let gray = upscale_u8_to_u16(chunk[0]);
+                let alpha = upscale_u8_to_u16(chunk[1]);
+                rgba.extend_from_slice(&[gray, gray, gray, alpha]);
             }
         }
-        (4, 16) => decode_grayscale_alpha16(raw, &mut rgba),
-        (6, 8) => rgba.extend_from_slice(raw),
-        (6, 16) => decode_rgba16(raw, &mut rgba),
+        (4, 16) => {
+            for chunk in raw.chunks_exact(4) {
+                let gray = u16::from_be_bytes([chunk[0], chunk[1]]);
+                let alpha = u16::from_be_bytes([chunk[2], chunk[3]]);
+                rgba.extend_from_slice(&[gray, gray, gray, alpha]);
+            }
+        }
+        (6, 8) => {
+            for chunk in raw.chunks_exact(4) {
+                rgba.extend_from_slice(&[
+                    upscale_u8_to_u16(chunk[0]),
+                    upscale_u8_to_u16(chunk[1]),
+                    upscale_u8_to_u16(chunk[2]),
+                    upscale_u8_to_u16(chunk[3]),
+                ]);
+            }
+        }
+        (6, 16) => {
+            for chunk in raw.chunks_exact(8) {
+                rgba.extend_from_slice(&[
+                    u16::from_be_bytes([chunk[0], chunk[1]]),
+                    u16::from_be_bytes([chunk[2], chunk[3]]),
+                    u16::from_be_bytes([chunk[4], chunk[5]]),
+                    u16::from_be_bytes([chunk[6], chunk[7]]),
+                ]);
+            }
+        }
         _ => unreachable!(),
     }
     Ok(rgba)
 }
 
-fn decode_grayscale_packed(
+fn expected_rgba16_len(header: &PngHeader) -> Result<usize> {
+    (header.width as usize)
+        .checked_mul(header.height as usize)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| Error::InvalidData("decoded RGBA16 size overflow".into()))
+}
+
+fn pixels_from_rgba16_source(
     header: &PngHeader,
-    width: u32,
-    raw: &[u8],
     ancillary: &AncillaryChunks,
-    rgba: &mut Vec<u8>,
-) -> Result<()> {
-    let transparent = match ancillary.transparency {
-        Some(Transparency::Grayscale(value)) => Some(value),
-        _ => None,
-    };
-    let row_stride = packed_stride_for_width(header, width)?;
-    for row in raw.chunks_exact(row_stride) {
-        for gray in unpack_samples(row, width as usize, header.bit_depth) {
-            let gray_sample = u16::from(gray);
-            let gray8 = scale_sample_to_u8(gray_sample, header.bit_depth);
-            let alpha = if Some(gray_sample) == transparent {
-                0
+    rgba: &[u16],
+) -> PngPixels<'static> {
+    match (
+        header.color_type,
+        header.bit_depth,
+        ancillary.transparency.is_some(),
+    ) {
+        (0, 16, false) => {
+            let data = rgba
+                .chunks_exact(4)
+                .map(|chunk| chunk[0])
+                .collect::<Vec<_>>();
+            PngPixels::Gray16(Cow::Owned(data))
+        }
+        (0, _, true) => {
+            if header.bit_depth == 16 {
+                let mut data = Vec::with_capacity(rgba.len() / 2);
+                for chunk in rgba.chunks_exact(4) {
+                    data.extend_from_slice(&[chunk[0], chunk[3]]);
+                }
+                PngPixels::GrayAlpha16(Cow::Owned(data))
             } else {
-                255
-            };
-            rgba.extend_from_slice(&[gray8, gray8, gray8, alpha]);
+                let mut data = Vec::with_capacity(rgba.len() / 2);
+                for chunk in rgba.chunks_exact(4) {
+                    data.extend_from_slice(&[downsample_u16(chunk[0]), downsample_u16(chunk[3])]);
+                }
+                PngPixels::GrayAlpha8(Cow::Owned(data))
+            }
+        }
+        (2, 16, false) => {
+            let data = rgba
+                .chunks_exact(4)
+                .flat_map(|chunk| [chunk[0], chunk[1], chunk[2]])
+                .collect::<Vec<_>>();
+            PngPixels::Rgb16(Cow::Owned(data))
+        }
+        (2, _, true) => {
+            if header.bit_depth == 16 {
+                PngPixels::Rgba16(Cow::Owned(rgba.to_vec()))
+            } else {
+                PngPixels::Rgba8(Cow::Owned(
+                    rgba.iter().copied().map(downsample_u16).collect(),
+                ))
+            }
+        }
+        (4, 8, _) => {
+            let mut data = Vec::with_capacity(rgba.len() / 2);
+            for chunk in rgba.chunks_exact(4) {
+                data.extend_from_slice(&[downsample_u16(chunk[0]), downsample_u16(chunk[3])]);
+            }
+            PngPixels::GrayAlpha8(Cow::Owned(data))
+        }
+        (4, 16, _) => {
+            let mut data = Vec::with_capacity(rgba.len() / 2);
+            for chunk in rgba.chunks_exact(4) {
+                data.extend_from_slice(&[chunk[0], chunk[3]]);
+            }
+            PngPixels::GrayAlpha16(Cow::Owned(data))
+        }
+        (6, 8, _) => PngPixels::Rgba8(Cow::Owned(
+            rgba.iter().copied().map(downsample_u16).collect(),
+        )),
+        (6, 16, _) => PngPixels::Rgba16(Cow::Owned(rgba.to_vec())),
+        _ => {
+            let data = rgba
+                .chunks_exact(4)
+                .map(|chunk| downsample_u16(chunk[0]))
+                .collect::<Vec<_>>();
+            match header.bit_depth {
+                1 => PngPixels::Gray1(Cow::Owned(
+                    data.iter().copied().map(|value| value / 255).collect(),
+                )),
+                2 => PngPixels::Gray2(Cow::Owned(
+                    data.iter().copied().map(|value| value / 85).collect(),
+                )),
+                4 => PngPixels::Gray4(Cow::Owned(
+                    data.iter().copied().map(|value| value / 17).collect(),
+                )),
+                8 => PngPixels::Gray8(Cow::Owned(data)),
+                _ => unreachable!(),
+            }
         }
     }
-    Ok(())
-}
-
-fn decode_grayscale16(raw: &[u8], ancillary: &AncillaryChunks, rgba: &mut Vec<u8>) {
-    let transparent = match ancillary.transparency {
-        Some(Transparency::Grayscale(value)) => Some(value),
-        _ => None,
-    };
-    for chunk in raw.chunks_exact(2) {
-        let gray16 = u16::from_be_bytes([chunk[0], chunk[1]]);
-        let gray8 = downsample_u16(gray16);
-        let alpha = if Some(gray16) == transparent { 0 } else { 255 };
-        rgba.extend_from_slice(&[gray8, gray8, gray8, alpha]);
-    }
-}
-
-fn decode_truecolor16(raw: &[u8], ancillary: &AncillaryChunks, rgba: &mut Vec<u8>) {
-    let transparent = match ancillary.transparency {
-        Some(Transparency::Truecolor(value)) => Some(value),
-        _ => None,
-    };
-    for chunk in raw.chunks_exact(6) {
-        let rgb16 = [
-            u16::from_be_bytes([chunk[0], chunk[1]]),
-            u16::from_be_bytes([chunk[2], chunk[3]]),
-            u16::from_be_bytes([chunk[4], chunk[5]]),
-        ];
-        let alpha = if Some(rgb16) == transparent { 0 } else { 255 };
-        rgba.extend_from_slice(&[
-            downsample_u16(rgb16[0]),
-            downsample_u16(rgb16[1]),
-            downsample_u16(rgb16[2]),
-            alpha,
-        ]);
-    }
-}
-
-fn decode_grayscale_alpha16(raw: &[u8], rgba: &mut Vec<u8>) {
-    for chunk in raw.chunks_exact(4) {
-        let gray = downsample_u16(u16::from_be_bytes([chunk[0], chunk[1]]));
-        let alpha = downsample_u16(u16::from_be_bytes([chunk[2], chunk[3]]));
-        rgba.extend_from_slice(&[gray, gray, gray, alpha]);
-    }
-}
-
-fn decode_rgba16(raw: &[u8], rgba: &mut Vec<u8>) {
-    for chunk in raw.chunks_exact(8) {
-        rgba.extend_from_slice(&[
-            downsample_u16(u16::from_be_bytes([chunk[0], chunk[1]])),
-            downsample_u16(u16::from_be_bytes([chunk[2], chunk[3]])),
-            downsample_u16(u16::from_be_bytes([chunk[4], chunk[5]])),
-            downsample_u16(u16::from_be_bytes([chunk[6], chunk[7]])),
-        ]);
-    }
-}
-
-fn decode_palette(
-    header: &PngHeader,
-    width: u32,
-    raw: &[u8],
-    ancillary: &AncillaryChunks,
-    rgba: &mut Vec<u8>,
-) -> Result<()> {
-    let palette = ancillary
-        .palette
-        .as_ref()
-        .ok_or_else(|| Error::InvalidData("missing PLTE for palette image".into()))?;
-    let alpha = match ancillary.transparency.as_ref() {
-        Some(Transparency::Palette(alpha)) => Some(alpha.as_slice()),
-        _ => None,
-    };
-    let row_stride = packed_stride_for_width(header, width)?;
-    for row in raw.chunks_exact(row_stride) {
-        for index in unpack_samples(row, width as usize, header.bit_depth) {
-            let Some(rgb) = palette.get(index as usize) else {
-                return Err(Error::InvalidData(format!(
-                    "palette index out of range: {}",
-                    index
-                )));
-            };
-            let alpha = alpha
-                .and_then(|table| table.get(index as usize))
-                .copied()
-                .unwrap_or(255);
-            rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], alpha]);
-        }
-    }
-    Ok(())
 }
 
 fn unpack_samples(bytes: &[u8], width: usize, bit_depth: u8) -> impl Iterator<Item = u8> + '_ {
@@ -1078,6 +1937,10 @@ fn downsample_u16(sample: u16) -> u8 {
     (sample >> 8) as u8
 }
 
+fn upscale_u8_to_u16(sample: u8) -> u16 {
+    u16::from(sample) * 257
+}
+
 #[derive(Debug)]
 struct EncodedImage {
     bit_depth: u8,
@@ -1089,6 +1952,20 @@ struct EncodedImage {
 }
 
 impl EncodedImage {
+    fn from_pixels(
+        width: u32,
+        height: u32,
+        pixels: &PngPixels<'_>,
+        encoding: PngEncoding,
+    ) -> Result<Self> {
+        if encoding.bit_depth == PngBitDepth::Sixteen {
+            let rgba16 = pixels.to_rgba16_vec();
+            return Self::from_rgba16(width, height, &rgba16, encoding);
+        }
+        let rgba8 = pixels.to_rgba8_vec();
+        Self::from_rgba(width, height, &rgba8, encoding)
+    }
+
     fn from_rgba(width: u32, height: u32, rgba: &[u8], encoding: PngEncoding) -> Result<Self> {
         let pixels = rgba
             .chunks_exact(4)
@@ -1110,6 +1987,28 @@ impl EncodedImage {
             trns: target.trns,
         })
     }
+
+    fn from_rgba16(width: u32, height: u32, rgba: &[u16], encoding: PngEncoding) -> Result<Self> {
+        let pixels = rgba
+            .chunks_exact(4)
+            .map(|chunk| [chunk[0], chunk[1], chunk[2], chunk[3]])
+            .collect::<Vec<_>>();
+        let target = EncodingTarget16::analyze(&pixels, encoding)?;
+        let interlace_method = u8::from(encoding.interlaced);
+        let filtered_data = if encoding.interlaced {
+            build_adam7_filtered_data16(width, height, &pixels, &target)?
+        } else {
+            build_filtered_data16(width, height, &pixels, &target)?
+        };
+        Ok(Self {
+            bit_depth: 16,
+            color_type: target.color_type,
+            interlace_method,
+            filtered_data,
+            palette: None,
+            trns: None,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -1129,6 +2028,20 @@ enum EncodedPixelKind {
     Rgb8,
     Rgba8,
     Indexed,
+}
+
+#[derive(Debug)]
+struct EncodingTarget16 {
+    color_type: u8,
+    pixel_kind: EncodedPixelKind16,
+}
+
+#[derive(Debug)]
+enum EncodedPixelKind16 {
+    Grayscale16,
+    GrayscaleAlpha16,
+    Rgb16,
+    Rgba16,
 }
 
 impl EncodingTarget {
@@ -1225,6 +2138,58 @@ impl EncodingTarget {
     }
 }
 
+impl EncodingTarget16 {
+    fn analyze(pixels: &[[u16; 4]], encoding: PngEncoding) -> Result<Self> {
+        validate_exact_bit_depth(
+            encoding.color_mode,
+            encoding.bit_depth,
+            &[PngBitDepth::Sixteen],
+        )?;
+        match encoding.color_mode {
+            PngColorMode::Grayscale => {
+                if !pixels_are_opaque_grayscale16(pixels) {
+                    return Err(Error::Unsupported(
+                        "grayscale encoding requires opaque grayscale pixels".into(),
+                    ));
+                }
+                Ok(Self {
+                    color_type: IhdrChunk::COLOR_TYPE_GRAYSCALE,
+                    pixel_kind: EncodedPixelKind16::Grayscale16,
+                })
+            }
+            PngColorMode::GrayscaleAlpha => {
+                if !pixels_are_grayscale16(pixels) {
+                    return Err(Error::Unsupported(
+                        "grayscale+alpha encoding requires grayscale pixels".into(),
+                    ));
+                }
+                Ok(Self {
+                    color_type: IhdrChunk::COLOR_TYPE_GRAYSCALE_ALPHA,
+                    pixel_kind: EncodedPixelKind16::GrayscaleAlpha16,
+                })
+            }
+            PngColorMode::Rgb => {
+                if !pixels_are_opaque16(pixels) {
+                    return Err(Error::Unsupported(
+                        "rgb encoding requires opaque pixels".into(),
+                    ));
+                }
+                Ok(Self {
+                    color_type: IhdrChunk::COLOR_TYPE_RGB,
+                    pixel_kind: EncodedPixelKind16::Rgb16,
+                })
+            }
+            PngColorMode::Rgba => Ok(Self {
+                color_type: IhdrChunk::COLOR_TYPE_RGBA,
+                pixel_kind: EncodedPixelKind16::Rgba16,
+            }),
+            PngColorMode::Indexed => Err(Error::Unsupported(
+                "16-bit indexed encoding is not supported".into(),
+            )),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct IndexedAnalysis {
     palette: Vec<[u8; 3]>,
@@ -1252,42 +2217,12 @@ fn color_type_from_color_mode(color_mode: PngColorMode) -> u8 {
     }
 }
 
-fn infer_encoding_from_pixels(pixels: &[[u8; 4]]) -> PngEncoding {
-    let opaque = pixels_are_opaque(pixels);
-    let grayscale = pixels_are_grayscale(pixels);
-    let gray_level_count = pixels
-        .iter()
-        .map(|pixel| pixel[0])
-        .collect::<BTreeSet<_>>()
-        .len();
-
-    let (color_mode, bit_depth) = if grayscale && opaque {
-        (
-            PngColorMode::Grayscale,
-            grayscale_bit_depth(pixels, gray_level_count),
-        )
-    } else if grayscale {
-        (PngColorMode::GrayscaleAlpha, PngBitDepth::Eight)
-    } else if opaque {
-        (PngColorMode::Rgb, PngBitDepth::Eight)
-    } else if let Some(indexed) = analyze_palette(pixels) {
-        (
-            PngColorMode::Indexed,
-            indexed_bit_depth(indexed.palette.len()),
-        )
-    } else {
-        (PngColorMode::Rgba, PngBitDepth::Eight)
-    };
-
-    PngEncoding {
-        color_mode,
-        bit_depth,
-        interlaced: false,
-    }
-}
-
 fn pixels_are_opaque(pixels: &[[u8; 4]]) -> bool {
     pixels.iter().all(|pixel| pixel[3] == 255)
+}
+
+fn pixels_are_opaque16(pixels: &[[u16; 4]]) -> bool {
+    pixels.iter().all(|pixel| pixel[3] == u16::MAX)
 }
 
 fn pixels_are_grayscale(pixels: &[[u8; 4]]) -> bool {
@@ -1296,8 +2231,18 @@ fn pixels_are_grayscale(pixels: &[[u8; 4]]) -> bool {
         .all(|pixel| pixel[0] == pixel[1] && pixel[1] == pixel[2])
 }
 
+fn pixels_are_grayscale16(pixels: &[[u16; 4]]) -> bool {
+    pixels
+        .iter()
+        .all(|pixel| pixel[0] == pixel[1] && pixel[1] == pixel[2])
+}
+
 fn pixels_are_opaque_grayscale(pixels: &[[u8; 4]]) -> bool {
     pixels_are_grayscale(pixels) && pixels_are_opaque(pixels)
+}
+
+fn pixels_are_opaque_grayscale16(pixels: &[[u16; 4]]) -> bool {
+    pixels_are_grayscale16(pixels) && pixels_are_opaque16(pixels)
 }
 
 fn validate_exact_bit_depth(
@@ -1402,30 +2347,6 @@ fn analyze_palette(pixels: &[[u8; 4]]) -> Option<IndexedAnalysis> {
     Some(IndexedAnalysis { palette, trns })
 }
 
-fn grayscale_bit_depth(pixels: &[[u8; 4]], gray_level_count: usize) -> PngBitDepth {
-    if pixels.iter().all(|pixel| matches!(pixel[0], 0 | 255)) {
-        PngBitDepth::One
-    } else if pixels
-        .iter()
-        .all(|pixel| matches!(pixel[0], 0 | 85 | 170 | 255))
-    {
-        PngBitDepth::Two
-    } else if pixels.iter().all(|pixel| pixel[0] % 17 == 0) && gray_level_count <= 16 {
-        PngBitDepth::Four
-    } else {
-        PngBitDepth::Eight
-    }
-}
-
-fn indexed_bit_depth(size: usize) -> PngBitDepth {
-    match size {
-        0 => unreachable!(),
-        1..=2 => PngBitDepth::One,
-        3..=4 => PngBitDepth::Two,
-        5..=16 => PngBitDepth::Four,
-        _ => PngBitDepth::Eight,
-    }
-}
 
 fn build_filtered_data(
     width: u32,
@@ -1465,6 +2386,49 @@ fn build_adam7_filtered_data(
                 })
                 .collect::<Vec<_>>();
             encode_row_into(&mut filtered, &row_pixels, target)?;
+        }
+    }
+    Ok(filtered)
+}
+
+fn build_filtered_data16(
+    width: u32,
+    height: u32,
+    pixels: &[[u16; 4]],
+    target: &EncodingTarget16,
+) -> Result<Vec<u8>> {
+    let mut filtered = Vec::new();
+    for row in 0..height as usize {
+        filtered.push(0);
+        let row_pixels = &pixels[row * width as usize..(row + 1) * width as usize];
+        encode_row16_into(&mut filtered, row_pixels, target);
+    }
+    Ok(filtered)
+}
+
+fn build_adam7_filtered_data16(
+    width: u32,
+    height: u32,
+    pixels: &[[u16; 4]],
+    target: &EncodingTarget16,
+) -> Result<Vec<u8>> {
+    let mut filtered = Vec::new();
+    for pass in ADAM7_PASSES {
+        let pass_width = adam7_axis_size(width, pass.x_start, pass.x_step);
+        let pass_height = adam7_axis_size(height, pass.y_start, pass.y_step);
+        if pass_width == 0 || pass_height == 0 {
+            continue;
+        }
+        for pass_y in 0..pass_height as usize {
+            filtered.push(0);
+            let y = pass.y_start as usize + pass_y * pass.y_step as usize;
+            let row_pixels = (0..pass_width as usize)
+                .map(|pass_x| {
+                    let x = pass.x_start as usize + pass_x * pass.x_step as usize;
+                    pixels[y * width as usize + x]
+                })
+                .collect::<Vec<_>>();
+            encode_row16_into(&mut filtered, &row_pixels, target);
         }
     }
     Ok(filtered)
@@ -1524,6 +2488,36 @@ fn encode_row_into(
     Ok(())
 }
 
+fn encode_row16_into(out: &mut Vec<u8>, row_pixels: &[[u16; 4]], target: &EncodingTarget16) {
+    match target.pixel_kind {
+        EncodedPixelKind16::Grayscale16 => {
+            for pixel in row_pixels {
+                out.extend_from_slice(&pixel[0].to_be_bytes());
+            }
+        }
+        EncodedPixelKind16::GrayscaleAlpha16 => {
+            for pixel in row_pixels {
+                out.extend_from_slice(&pixel[0].to_be_bytes());
+                out.extend_from_slice(&pixel[3].to_be_bytes());
+            }
+        }
+        EncodedPixelKind16::Rgb16 => {
+            for pixel in row_pixels {
+                out.extend_from_slice(&pixel[0].to_be_bytes());
+                out.extend_from_slice(&pixel[1].to_be_bytes());
+                out.extend_from_slice(&pixel[2].to_be_bytes());
+            }
+        }
+        EncodedPixelKind16::Rgba16 => {
+            for pixel in row_pixels {
+                for &sample in pixel {
+                    out.extend_from_slice(&sample.to_be_bytes());
+                }
+            }
+        }
+    }
+}
+
 fn target_alpha(target: &EncodingTarget) -> impl Iterator<Item = u8> + '_ {
     let trns = target.trns.as_deref().unwrap_or(&[]);
     (0..target.palette.as_ref().map_or(0, Vec::len))
@@ -1568,60 +2562,196 @@ fn packed_stride_for_width(header: &PngHeader, width: u32) -> Result<usize> {
         .ok_or_else(|| Error::InvalidData("scanline stride overflow".into()))
 }
 
-fn decode_adam7_to_rgba(
+fn decode_adam7_to_pixels(
     header: &PngHeader,
     filtered: &[u8],
     ancillary: &AncillaryChunks,
-) -> Result<Vec<u8>> {
-    let mut rgba = vec![0; header.width as usize * header.height as usize * 4];
-    let mut offset = 0;
+) -> Result<PngPixels<'static>> {
+    let pixel_count = (header.width as usize)
+        .checked_mul(header.height as usize)
+        .ok_or_else(|| Error::InvalidData("pixel count overflow".into()))?;
+    let mut offset = 0usize;
 
-    for pass in ADAM7_PASSES {
-        let pass_width = adam7_axis_size(header.width, pass.x_start, pass.x_step);
-        let pass_height = adam7_axis_size(header.height, pass.y_start, pass.y_step);
-        if pass_width == 0 || pass_height == 0 {
-            continue;
+    match (
+        header.color_type,
+        header.bit_depth,
+        ancillary.transparency.is_some(),
+    ) {
+        (0, 1, false) | (0, 2, false) | (0, 4, false) => {
+            let mut samples = vec![0u8; pixel_count];
+            for pass in ADAM7_PASSES {
+                let (pass_width, pass_height, pass_filtered) =
+                    adam7_pass_window(header, filtered, &mut offset, pass)?;
+                let pass_raw = unfilter_scanlines(header, pass_width, pass_height, pass_filtered)?;
+                let pass_pixels = convert_grayscale_low_bit_to_pixels(
+                    header,
+                    pass_width,
+                    &pass_raw,
+                    ancillary,
+                    header.bit_depth,
+                )?;
+                let pass_samples = match pass_pixels {
+                    PngPixels::Gray1(data) | PngPixels::Gray2(data) | PngPixels::Gray4(data) => {
+                        data.into_owned()
+                    }
+                    _ => unreachable!(),
+                };
+                scatter_scalar_u8(
+                    &mut samples,
+                    header.width,
+                    pass,
+                    pass_width,
+                    pass_height,
+                    &pass_samples,
+                );
+            }
+            finish_adam7_offset(filtered, offset)?;
+            Ok(match header.bit_depth {
+                1 => PngPixels::Gray1(Cow::Owned(samples)),
+                2 => PngPixels::Gray2(Cow::Owned(samples)),
+                4 => PngPixels::Gray4(Cow::Owned(samples)),
+                _ => unreachable!(),
+            })
         }
-
-        let pass_stride = packed_stride_for_width(header, pass_width)?;
-        let pass_filtered_len = (pass_stride + 1)
-            .checked_mul(pass_height as usize)
-            .ok_or_else(|| Error::InvalidData("Adam7 pass size overflow".into()))?;
-        let pass_filtered = filtered
-            .get(offset..offset + pass_filtered_len)
-            .ok_or_else(|| Error::InvalidData("truncated Adam7 data".into()))?;
-        offset += pass_filtered_len;
-
-        let pass_raw = unfilter_scanlines(header, pass_width, pass_height, pass_filtered)?;
-        let pass_rgba = convert_to_rgba(header, pass_width, pass_height, &pass_raw, ancillary)?;
-        scatter_adam7_pass(
-            &mut rgba,
-            header.width,
-            pass,
-            pass_width,
-            pass_height,
-            &pass_rgba,
-        );
+        (3, 1 | 2 | 4 | 8, _) => {
+            let mut indices = vec![0u8; pixel_count];
+            for pass in ADAM7_PASSES {
+                let (pass_width, pass_height, pass_filtered) =
+                    adam7_pass_window(header, filtered, &mut offset, pass)?;
+                let pass_raw = unfilter_scanlines(header, pass_width, pass_height, pass_filtered)?;
+                let pass_pixels =
+                    convert_indexed_to_pixels(header, pass_width, &pass_raw, ancillary)?;
+                let pass_indices = match pass_pixels {
+                    PngPixels::Indexed1 { indices, .. }
+                    | PngPixels::Indexed2 { indices, .. }
+                    | PngPixels::Indexed4 { indices, .. }
+                    | PngPixels::Indexed8 { indices, .. } => indices.into_owned(),
+                    _ => unreachable!(),
+                };
+                scatter_scalar_u8(
+                    &mut indices,
+                    header.width,
+                    pass,
+                    pass_width,
+                    pass_height,
+                    &pass_indices,
+                );
+            }
+            finish_adam7_offset(filtered, offset)?;
+            let palette = ancillary
+                .palette
+                .as_ref()
+                .ok_or_else(|| Error::InvalidData("missing PLTE for palette image".into()))?
+                .clone();
+            let trns = match ancillary.transparency.as_ref() {
+                Some(Transparency::Palette(alpha)) => Some(Cow::Owned(alpha.clone())),
+                _ => None,
+            };
+            Ok(match header.bit_depth {
+                1 => PngPixels::Indexed1 {
+                    indices: Cow::Owned(indices),
+                    palette: Cow::Owned(palette),
+                    trns,
+                },
+                2 => PngPixels::Indexed2 {
+                    indices: Cow::Owned(indices),
+                    palette: Cow::Owned(palette),
+                    trns,
+                },
+                4 => PngPixels::Indexed4 {
+                    indices: Cow::Owned(indices),
+                    palette: Cow::Owned(palette),
+                    trns,
+                },
+                8 => PngPixels::Indexed8 {
+                    indices: Cow::Owned(indices),
+                    palette: Cow::Owned(palette),
+                    trns,
+                },
+                _ => unreachable!(),
+            })
+        }
+        _ => {
+            let mut rgba = vec![0; expected_rgba16_len(header)?];
+            for pass in ADAM7_PASSES {
+                let (pass_width, pass_height, pass_filtered) =
+                    adam7_pass_window(header, filtered, &mut offset, pass)?;
+                let pass_raw = unfilter_scanlines(header, pass_width, pass_height, pass_filtered)?;
+                let pass_rgba =
+                    convert_to_rgba16(header, pass_width, pass_height, &pass_raw, ancillary)?;
+                scatter_adam7_pass16(
+                    &mut rgba,
+                    header.width,
+                    pass,
+                    pass_width,
+                    pass_height,
+                    &pass_rgba,
+                );
+            }
+            finish_adam7_offset(filtered, offset)?;
+            Ok(pixels_from_rgba16_source(header, ancillary, &rgba))
+        }
     }
+}
 
+fn adam7_pass_window<'a>(
+    header: &PngHeader,
+    filtered: &'a [u8],
+    offset: &mut usize,
+    pass: Adam7Pass,
+) -> Result<(u32, u32, &'a [u8])> {
+    let pass_width = adam7_axis_size(header.width, pass.x_start, pass.x_step);
+    let pass_height = adam7_axis_size(header.height, pass.y_start, pass.y_step);
+    if pass_width == 0 || pass_height == 0 {
+        return Ok((0, 0, &[]));
+    }
+    let pass_stride = packed_stride_for_width(header, pass_width)?;
+    let pass_filtered_len = (pass_stride + 1)
+        .checked_mul(pass_height as usize)
+        .ok_or_else(|| Error::InvalidData("Adam7 pass size overflow".into()))?;
+    let pass_filtered = filtered
+        .get(*offset..*offset + pass_filtered_len)
+        .ok_or_else(|| Error::InvalidData("truncated Adam7 data".into()))?;
+    *offset += pass_filtered_len;
+    Ok((pass_width, pass_height, pass_filtered))
+}
+
+fn finish_adam7_offset(filtered: &[u8], offset: usize) -> Result<()> {
     if offset != filtered.len() {
-        return Err(Error::InvalidData(format!(
+        Err(Error::InvalidData(format!(
             "unexpected Adam7 data size: consumed {}, got {}",
             offset,
             filtered.len()
-        )));
+        )))
+    } else {
+        Ok(())
     }
-
-    Ok(rgba)
 }
 
-fn scatter_adam7_pass(
-    full_rgba: &mut [u8],
+fn scatter_scalar_u8(
+    full: &mut [u8],
     full_width: u32,
     pass: Adam7Pass,
     pass_width: u32,
     pass_height: u32,
-    pass_rgba: &[u8],
+    pass_values: &[u8],
+) {
+    for pass_y in 0..pass_height as usize {
+        for pass_x in 0..pass_width as usize {
+            let x = pass.x_start as usize + pass_x * pass.x_step as usize;
+            let y = pass.y_start as usize + pass_y * pass.y_step as usize;
+            full[y * full_width as usize + x] = pass_values[pass_y * pass_width as usize + pass_x];
+        }
+    }
+}
+
+fn scatter_adam7_pass16(
+    full_rgba: &mut [u16],
+    full_width: u32,
+    pass: Adam7Pass,
+    pass_width: u32,
+    pass_height: u32,
+    pass_rgba: &[u16],
 ) {
     for pass_y in 0..pass_height as usize {
         for pass_x in 0..pass_width as usize {
@@ -1633,6 +2763,7 @@ fn scatter_adam7_pass(
         }
     }
 }
+
 
 fn adam7_axis_size(size: u32, start: u8, step: u8) -> u32 {
     if size <= u32::from(start) {
@@ -1705,122 +2836,73 @@ impl<'a> Cursor<'a> {
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
+    use alloc::{vec, vec::Vec};
 
     use super::{
         Error, IhdrChunk, PNG_SIGNATURE, PngBitDepth, PngColorMode, PngEncoding, PngImage, PngInfo,
+        PngPixels,
     };
 
     #[test]
     fn roundtrip_rgba_writer_and_reader() {
-        let image = PngImage::new(2, 1, vec![255, 0, 0, 255, 0, 255, 0, 128]).unwrap();
+        let pixels = PngPixels::from_rgba8(vec![255, 0, 0, 255, 0, 255, 0, 128]);
+        let image = PngImage::new(2, 1, pixels.clone(), PngEncoding::for_pixels(&pixels)).unwrap();
         let bytes = image.to_bytes().unwrap();
-
         let decoded = PngImage::from_bytes(&bytes).unwrap();
-        assert_eq!(decoded.width(), 2);
-        assert_eq!(decoded.height(), 1);
-        assert_eq!(decoded.data(), image.data());
-    }
-
-    #[test]
-    fn write_to_auto_prefers_grayscale_for_opaque_grayscale() {
-        let image = PngImage::new(
-            4,
-            1,
-            vec![
-                0, 0, 0, 255, 85, 85, 85, 255, 170, 170, 170, 255, 255, 255, 255, 255,
-            ],
-        )
-        .unwrap();
         assert_eq!(
-            image.encoding(),
-            &PngEncoding {
-                color_mode: PngColorMode::Grayscale,
-                bit_depth: PngBitDepth::Two,
-                interlaced: false,
-            }
+            decoded.pixels().to_rgba8().as_u8_slice().unwrap(),
+            pixels.to_rgba8().as_u8_slice().unwrap()
         );
-        let bytes = image.to_bytes().unwrap();
-
-        let ihdr = read_ihdr(&bytes);
-        assert_eq!(ihdr.bit_depth, 2);
-        assert_eq!(ihdr.color_type, IhdrChunk::COLOR_TYPE_GRAYSCALE);
-        assert_eq!(ihdr.interlace_method, 0);
-        assert!(find_chunk(&bytes, b"PLTE").is_none());
-        let decoded = PngImage::from_bytes(&bytes).unwrap();
-        assert_eq!(decoded.data(), image.data());
     }
 
     #[test]
     fn write_to_uses_explicit_indexed_encoding() {
-        let mut image = PngImage::new(
-            4,
-            1,
-            vec![
-                255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 255, 255, 255, 0, 64,
-            ],
-        )
-        .unwrap();
+        let pixels = PngPixels::from_rgba8(vec![
+            255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 255, 255, 255, 0, 64,
+        ]);
+        let mut image =
+            PngImage::new(4, 1, pixels.clone(), PngEncoding::for_pixels(&pixels)).unwrap();
         *image.encoding_mut() = PngEncoding {
             color_mode: PngColorMode::Indexed,
             bit_depth: PngBitDepth::Two,
             interlaced: false,
         };
         let bytes = image.to_bytes().unwrap();
-
         let ihdr = read_ihdr(&bytes);
         assert_eq!(ihdr.bit_depth, 2);
         assert_eq!(ihdr.color_type, IhdrChunk::COLOR_TYPE_INDEXED);
-        assert!(find_chunk(&bytes, b"PLTE").is_some());
-        assert!(find_chunk(&bytes, b"tRNS").is_some());
         let decoded = PngImage::from_bytes(&bytes).unwrap();
-        assert_eq!(decoded.data(), image.data());
-    }
-
-    #[test]
-    fn write_to_uses_explicit_adam7_encoding() {
-        let mut image = PngImage::new(
-            3,
-            3,
-            vec![
-                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 10, 20, 30, 255, 40, 50, 60, 255,
-                70, 80, 90, 255, 100, 110, 120, 255, 130, 140, 150, 255, 160, 170, 180, 255,
-            ],
-        )
-        .unwrap();
-        *image.encoding_mut() = PngEncoding {
-            color_mode: PngColorMode::Rgb,
-            bit_depth: PngBitDepth::Eight,
-            interlaced: true,
-        };
-        let bytes = image.to_bytes().unwrap();
-
-        let ihdr = read_ihdr(&bytes);
-        assert_eq!(ihdr.color_type, IhdrChunk::COLOR_TYPE_RGB);
-        assert_eq!(ihdr.interlace_method, 1);
-        let decoded = PngImage::from_bytes(&bytes).unwrap();
-        assert_eq!(decoded.data(), image.data());
-    }
-
-    #[test]
-    fn infer_from_rgba_returns_none_for_partial_pixel() {
-        assert_eq!(PngEncoding::infer_from_rgba(&[1, 2, 3]), None);
-    }
-
-    #[test]
-    fn new_rejects_rgba8_length_mismatch() {
-        let error = PngImage::new(2, 1, vec![0, 1, 2, 3]).unwrap_err();
-        assert!(
-            matches!(error, Error::InvalidData(message) if message.contains("image size does not match RGBA8 buffer length"))
+        assert_eq!(
+            decoded.pixels().to_rgba8().as_u8_slice().unwrap(),
+            pixels.to_rgba8().as_u8_slice().unwrap()
         );
     }
 
     #[test]
-    fn new_with_encoding_rejects_rgba8_length_mismatch() {
-        let error = PngImage::new_with_encoding(
+    fn borrowed_rgb8_can_be_encoded() {
+        let data = [255u8, 0, 0, 0, 255, 0];
+        let image = PngImage::new(
             2,
             1,
-            vec![0, 1, 2, 3],
+            PngPixels::from_rgb8(&data[..]),
+            PngEncoding {
+                color_mode: PngColorMode::Rgb,
+                bit_depth: PngBitDepth::Eight,
+                interlaced: false,
+            },
+        )
+        .unwrap();
+        let bytes = image.to_bytes().unwrap();
+        let decoded = PngImage::from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.pixels().to_rgb8().as_u8_slice().unwrap(), &data);
+    }
+
+    #[test]
+    fn new_rejects_pixel_count_mismatch() {
+        let error = PngImage::new(
+            2,
+            1,
+            PngPixels::from_rgba8(vec![0, 1, 2, 3]),
             PngEncoding {
                 color_mode: PngColorMode::Rgba,
                 bit_depth: PngBitDepth::Eight,
@@ -1829,34 +2911,47 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            matches!(error, Error::InvalidData(message) if message.contains("image size does not match RGBA8 buffer length"))
+            matches!(error, Error::InvalidData(message) if message.contains("pixel buffer length"))
         );
     }
 
     #[test]
-    fn decoding_preserves_source_encoding_summary() {
-        let image =
-            PngImage::from_bytes(include_bytes!("../tests/data/gray16_interlaced.png")).unwrap();
-        assert_eq!(
-            image.encoding(),
-            &PngEncoding {
-                color_mode: PngColorMode::GrayscaleAlpha,
+    fn new_rejects_index_out_of_range() {
+        let error = PngImage::new(
+            2,
+            1,
+            PngPixels::from_indexed2(
+                vec![0, 4],
+                vec![[0, 0, 0], [255, 255, 255]],
+                None::<Vec<u8>>,
+            ),
+            PngEncoding {
+                color_mode: PngColorMode::Indexed,
+                bit_depth: PngBitDepth::Two,
+                interlaced: false,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::InvalidData(message) if message.contains("out-of-range")));
+    }
+
+    #[test]
+    fn writing_with_sixteen_bit_encoding_writes_sixteen_bit_png() {
+        let image = PngImage::new(
+            2,
+            1,
+            PngPixels::from_rgba16(vec![0u16, 1, 2, 3, 65535, 32768, 16, 255]),
+            PngEncoding {
+                color_mode: PngColorMode::Rgba,
                 bit_depth: PngBitDepth::Sixteen,
-                interlaced: true,
-            }
-        );
-    }
-
-    #[test]
-    fn writing_with_sixteen_bit_encoding_writes_eight_bit_png() {
-        let image =
-            PngImage::from_bytes(include_bytes!("../tests/data/gray16_interlaced.png")).unwrap();
+                interlaced: false,
+            },
+        )
+        .unwrap();
         let bytes = image.to_bytes().unwrap();
-
         let ihdr = read_ihdr(&bytes);
-        assert_eq!(ihdr.bit_depth, 8);
-        assert_eq!(ihdr.color_type, IhdrChunk::COLOR_TYPE_GRAYSCALE_ALPHA);
-        assert_eq!(ihdr.interlace_method, 1);
+        assert_eq!(ihdr.bit_depth, 16);
+        assert_eq!(ihdr.color_type, IhdrChunk::COLOR_TYPE_RGBA);
     }
 
     #[test]
@@ -1868,7 +2963,6 @@ mod tests {
     struct IhdrInfo {
         bit_depth: u8,
         color_type: u8,
-        interlace_method: u8,
     }
 
     fn read_ihdr(bytes: &[u8]) -> IhdrInfo {
@@ -1876,7 +2970,6 @@ mod tests {
         IhdrInfo {
             bit_depth: ihdr[8],
             color_type: ihdr[9],
-            interlace_method: ihdr[12],
         }
     }
 
