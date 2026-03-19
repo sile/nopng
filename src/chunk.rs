@@ -75,13 +75,13 @@ pub(crate) struct IdatChunk<'a> {
 }
 
 impl IdatChunk<'_> {
-    pub(crate) fn append_to(&self, out: &mut Vec<u8>) -> crate::png::Result<()> {
+    pub(crate) fn append_to(&self, out: &mut Vec<u8>) -> crate::png_types::Result<()> {
         let chunk_data = self.chunk_data()?;
         append_chunk(out, b"IDAT", &chunk_data);
         Ok(())
     }
 
-    fn chunk_data(&self) -> crate::png::Result<Vec<u8>> {
+    fn chunk_data(&self) -> crate::png_types::Result<Vec<u8>> {
         let mut data = Vec::new();
         data.extend_from_slice(&zlib::ZLIB_HEADER);
         let deflated = deflate::compress(self.filtered_data).map_err(|error| {

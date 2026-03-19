@@ -3,7 +3,7 @@
 
 //! `nopng` — a minimal, `no_std` PNG encoder/decoder.
 //!
-//! See [`decode_image`], [`encode_image`], and [`ImageSpec`] for the main API.
+//! See [`decode_image`], [`encode_image`], [`inspect_image`], and [`ImageSpec`] for the main API.
 //!
 //! # Examples
 //!
@@ -44,7 +44,7 @@
 //! # Ok::<(), nopng::Error>(())
 //! ```
 //!
-//! Pre-allocate the output buffer with [`decode_image_into`]:
+//! Pre-inspect a PNG to learn its format before decoding:
 //!
 //! ```
 //! # let png_bytes = nopng::encode_image(
@@ -52,8 +52,7 @@
 //! #     &[128],
 //! # )?;
 //! let spec = nopng::inspect_image(&png_bytes)?;
-//! let mut buf = vec![0u8; spec.data_len()];
-//! nopng::decode_image_into(&png_bytes, None, &mut buf)?;
+//! println!("{}x{}", spec.width, spec.height);
 //! # Ok::<(), nopng::Error>(())
 //! ```
 
@@ -72,9 +71,7 @@ mod zlib;
 
 pub use png::Error;
 pub use png::ImageSpec;
-pub use png::Result;
 pub use png::decode_image;
-pub use png::decode_image_into;
 pub use png::encode_image;
 pub use png::inspect_image;
 pub use png_types::PixelFormat;

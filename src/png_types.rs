@@ -11,13 +11,13 @@ pub enum Error {
     InvalidData(Cow<'static, str>),
 }
 
-/// A convenience alias for `core::result::Result<T, Error>`.
-pub type Result<T> = core::result::Result<T, Error>;
+pub(crate) type Result<T> = core::result::Result<T, Error>;
 
 impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Unsupported(message) | Self::InvalidData(message) => f.write_str(message),
+            Self::Unsupported(message) => write!(f, "unsupported: {message}"),
+            Self::InvalidData(message) => write!(f, "invalid data: {message}"),
         }
     }
 }
@@ -65,7 +65,7 @@ impl CoreError for Error {
 ///
 /// # Format queries
 ///
-/// `PixelFormat` has no public methods. Query the format by pattern matching:
+/// Query the format by pattern matching:
 ///
 /// ```
 /// # let png_bytes = nopng::encode_image(
@@ -98,7 +98,8 @@ impl CoreError for Error {
 /// # Ok::<(), nopng::Error>(())
 /// ```
 ///
-/// Use [`crate::ImageSpec::data_len()`] to compute the expected buffer size.
+/// Use [`PixelFormat::data_len()`] to compute the expected buffer size for
+/// given dimensions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PixelFormat {
     /// 1-bit grayscale (1 byte per sample, unpacked). Valid sample values: 0–1.
@@ -197,10 +198,19 @@ impl PixelFormat {
 
     /// Expected byte length of the pixel data buffer for the given dimensions.
     ///
+    /// This is useful when you need to know the buffer size before constructing
+    /// an [`ImageSpec`](crate::ImageSpec) — for example, to pre-allocate a
+    /// buffer or to estimate the size after a format conversion.
+    ///
+    /// ```
+    /// let len = nopng::PixelFormat::Rgba8.data_len(100, 100);
+    /// assert_eq!(len, 40_000);
+    /// ```
+    ///
     /// # Panics
     ///
     /// Panics if `width * height * bytes_per_pixel` overflows `usize`.
-    pub(crate) fn data_len(&self, width: u32, height: u32) -> usize {
+    pub fn data_len(&self, width: u32, height: u32) -> usize {
         (width as usize)
             .checked_mul(height as usize)
             .and_then(|pixels| pixels.checked_mul(self.bytes_per_pixel()))

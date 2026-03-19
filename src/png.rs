@@ -3,7 +3,8 @@ use alloc::vec::Vec;
 use crate::chunk::{IdatChunk, IendChunk, IhdrChunk, PlteChunk, TrnsChunk};
 use crate::pixel_reformat::{reformat, validate_format_and_data};
 
-pub use crate::png_types::{Error, PixelFormat, Result};
+use crate::png_types::Result;
+pub use crate::png_types::{Error, PixelFormat};
 
 pub(crate) const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 pub(crate) const ADAM7_PASSES: [Adam7Pass; 7] = [
@@ -55,11 +56,17 @@ pub(crate) const ADAM7_PASSES: [Adam7Pass; 7] = [
 ///
 /// `ImageSpec` serves two roles:
 ///
-/// - **Decode output** — returned by [`decode_image`], [`decode_image_into`],
-///   and [`inspect_image`] to describe the decoded (or to-be-decoded) pixel
-///   data.
+/// - **Decode output** — returned by [`decode_image`] and [`inspect_image`]
+///   to describe the decoded (or to-be-decoded) pixel data.
 /// - **Encode input** — passed to [`encode_image`] to specify how pixel data
 ///   should be written into a PNG stream.
+///
+/// # Constraints
+///
+/// `width` and `height` must both be non-zero. [`encode_image`] and
+/// [`decode_image`] return [`Error::InvalidData`] when given a zero dimension.
+/// The `pixel_format` (and its embedded palette/trns for indexed variants) is
+/// likewise validated at encode/decode time.
 ///
 /// # Pixel data layout
 ///
@@ -255,37 +262,6 @@ pub fn decode_image(bytes: &[u8], format: Option<&PixelFormat>) -> Result<(Image
     }
 }
 
-/// Decodes PNG bytes into a caller-provided buffer.
-///
-/// Returns the [`ImageSpec`] describing the decoded data. The buffer length
-/// must exactly match `ImageSpec::data_len()` for the decoded format.
-///
-/// Typical usage:
-/// ```
-/// # let png_bytes = nopng::encode_image(
-/// #     &nopng::ImageSpec::new(1, 1, nopng::PixelFormat::Gray8),
-/// #     &[128],
-/// # )?;
-/// let spec = nopng::inspect_image(&png_bytes)?;
-/// let mut out = vec![0; spec.data_len()];
-/// nopng::decode_image_into(&png_bytes, None, &mut out)?;
-/// # Ok::<(), nopng::Error>(())
-/// ```
-pub fn decode_image_into(
-    bytes: &[u8],
-    format: Option<&PixelFormat>,
-    out: &mut [u8],
-) -> Result<ImageSpec> {
-    let (spec, data) = decode_image(bytes, format)?;
-    if out.len() != data.len() {
-        return Err(Error::InvalidData(
-            "output buffer size does not match decoded data length".into(),
-        ));
-    }
-    out.copy_from_slice(&data);
-    Ok(spec)
-}
-
 /// Encodes an image described by `spec` into PNG bytes.
 ///
 /// The `data` buffer must contain pixel data in the format described by
@@ -347,8 +323,8 @@ mod tests {
     use alloc::{vec, vec::Vec};
 
     use super::{
-        Error, IhdrChunk, ImageSpec, PNG_SIGNATURE, PixelFormat, decode_image, decode_image_into,
-        encode_image, inspect_image,
+        Error, IhdrChunk, ImageSpec, PNG_SIGNATURE, PixelFormat, decode_image, encode_image,
+        inspect_image,
     };
     use crate::pixel_reformat::reformat;
 
@@ -618,23 +594,6 @@ mod tests {
         let original_rgba =
             reformat(&spec.pixel_format, &indices, &PixelFormat::Rgba8).expect("infallible");
         assert_eq!(decoded_rgba, original_rgba);
-    }
-
-    #[test]
-    fn decode_image_into_matches_decode_image() {
-        let data = vec![255, 0, 0, 255, 0, 255, 0, 128];
-        let spec = ImageSpec {
-            width: 2,
-            height: 1,
-            pixel_format: PixelFormat::Rgba8,
-            interlaced: false,
-        };
-        let bytes = encode_image(&spec, &data).expect("infallible");
-        let (spec1, data1) = decode_image(&bytes, None).expect("infallible");
-        let mut out = vec![0; spec1.data_len()];
-        let spec2 = decode_image_into(&bytes, None, &mut out).expect("infallible");
-        assert_eq!(spec1, spec2);
-        assert_eq!(data1, out);
     }
 
     struct IhdrInfo {
