@@ -19,6 +19,4 @@ pub use png::Result;
 pub use png::decode_image;
 pub use png::decode_image_into;
 pub use png::encode_image;
-pub use png_types::BitDepth;
-pub use png_types::ColorMode;
 pub use png_types::PixelFormat;

@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 
 use crate::chunk::IhdrChunk;
 use crate::pixel_reformat::{scale_sample_to_u8, upscale_u8_to_u16};
-use crate::png_types::{BitDepth, Error, PixelFormat, Result};
+use crate::png_types::{Error, PixelFormat, Result};
 use crate::{adler32, crc, deflate};
 
 use crate::png::{ADAM7_PASSES, Adam7Pass, PNG_SIGNATURE, adam7_axis_size};
@@ -563,12 +563,7 @@ fn convert_to_format_and_data(
                 }
                 Ok((PixelFormat::GrayAlpha8, data))
             } else {
-                Ok((
-                    PixelFormat::Gray {
-                        bit_depth: BitDepth::Eight,
-                    },
-                    raw.to_vec(),
-                ))
+                Ok((PixelFormat::Gray8, raw.to_vec()))
             }
         }
         (CT_GRAY, 16) => {
@@ -590,12 +585,7 @@ fn convert_to_format_and_data(
                 Ok((PixelFormat::GrayAlpha16Be, data))
             } else {
                 // Pass raw BE bytes through directly.
-                Ok((
-                    PixelFormat::Gray {
-                        bit_depth: BitDepth::Sixteen,
-                    },
-                    raw.to_vec(),
-                ))
+                Ok((PixelFormat::Gray16Be, raw.to_vec()))
             }
         }
         (CT_RGB, 8) => {
@@ -689,13 +679,7 @@ fn convert_grayscale_low_bit(
         }
         Ok((PixelFormat::GrayAlpha8, data))
     } else {
-        Ok((
-            PixelFormat::Gray {
-                bit_depth: BitDepth::from_u8(header.bit_depth)
-                    .expect("bug: validated grayscale bit depth must map to BitDepth"),
-            },
-            unpacked,
-        ))
+        Ok((gray_format_from_bit_depth(header.bit_depth), unpacked))
     }
 }
 
@@ -718,15 +702,9 @@ fn convert_indexed(
     for row in raw.chunks_exact(row_stride) {
         unpacked.extend(unpack_samples(row, width as usize, header.bit_depth));
     }
-    Ok((
-        PixelFormat::Indexed {
-            bit_depth: BitDepth::from_u8(header.bit_depth)
-                .expect("bug: validated indexed bit depth must map to BitDepth"),
-            palette: flatten_palette(palette),
-            trns,
-        },
-        unpacked,
-    ))
+    let flat_palette = flatten_palette(palette);
+    let format = indexed_format_from_bit_depth(header.bit_depth, flat_palette, trns);
+    Ok((format, unpacked))
 }
 
 /// Convert raw data into RGBA16Be intermediate for Adam7 scatter (fallback path).
@@ -905,12 +883,7 @@ fn format_from_rgba16be_source(
             for chunk in chunks {
                 data.extend_from_slice(&chunk[..2]);
             }
-            (
-                PixelFormat::Gray {
-                    bit_depth: BitDepth::Sixteen,
-                },
-                data,
-            )
+            (PixelFormat::Gray16Be, data)
         }
         (CT_GRAY, _, true) => {
             if header.bit_depth == 16 {
@@ -995,13 +968,7 @@ fn format_from_rgba16be_source(
                 8 => data,
                 _ => unreachable!(),
             };
-            (
-                PixelFormat::Gray {
-                    bit_depth: BitDepth::from_u8(header.bit_depth)
-                        .expect("bug: validated grayscale bit depth must map to BitDepth"),
-                },
-                samples,
-            )
+            (gray_format_from_bit_depth(header.bit_depth), samples)
         }
     }
 }
@@ -1187,13 +1154,7 @@ fn decode_adam7_to_format_and_data(
                 );
             }
             finish_adam7_offset(filtered, offset)?;
-            Ok((
-                PixelFormat::Gray {
-                    bit_depth: BitDepth::from_u8(header.bit_depth)
-                        .expect("bug: validated grayscale bit depth must map to BitDepth"),
-                },
-                samples,
-            ))
+            Ok((gray_format_from_bit_depth(header.bit_depth), samples))
         }
         (CT_INDEXED, 1 | 2 | 4 | 8, _) => {
             let mut indices = vec![0u8; pixel_count];
@@ -1222,26 +1183,14 @@ fn decode_adam7_to_format_and_data(
                 Some(Transparency::Palette(alpha)) => Some(alpha.clone()),
                 _ => None,
             };
-            Ok((
-                PixelFormat::Indexed {
-                    bit_depth: BitDepth::from_u8(header.bit_depth)
-                        .expect("bug: validated indexed bit depth must map to BitDepth"),
-                    palette: flat_palette,
-                    trns,
-                },
-                indices,
-            ))
+            let format = indexed_format_from_bit_depth(header.bit_depth, flat_palette, trns);
+            Ok((format, indices))
         }
         // 8-bit types without tRNS: scatter raw bytes directly.
         (CT_GRAY, 8, false) => {
             let data = adam7_scatter_raw_bytes(header, filtered, &mut offset, 1)?;
             finish_adam7_offset(filtered, offset)?;
-            Ok((
-                PixelFormat::Gray {
-                    bit_depth: BitDepth::Eight,
-                },
-                data,
-            ))
+            Ok((PixelFormat::Gray8, data))
         }
         (CT_GRAY_ALPHA, 8, _) => {
             let data = adam7_scatter_raw_bytes(header, filtered, &mut offset, 2)?;
@@ -1382,6 +1331,31 @@ fn scatter_bytes(
             full[dst..dst + bytes_per_pixel]
                 .copy_from_slice(&pass_data[src..src + bytes_per_pixel]);
         }
+    }
+}
+
+fn gray_format_from_bit_depth(bit_depth: u8) -> PixelFormat {
+    match bit_depth {
+        1 => PixelFormat::Gray1,
+        2 => PixelFormat::Gray2,
+        4 => PixelFormat::Gray4,
+        8 => PixelFormat::Gray8,
+        16 => PixelFormat::Gray16Be,
+        _ => unreachable!("bug: validated grayscale bit depth must be 1/2/4/8/16"),
+    }
+}
+
+fn indexed_format_from_bit_depth(
+    bit_depth: u8,
+    palette: Vec<u8>,
+    trns: Option<Vec<u8>>,
+) -> PixelFormat {
+    match bit_depth {
+        1 => PixelFormat::Indexed1 { palette, trns },
+        2 => PixelFormat::Indexed2 { palette, trns },
+        4 => PixelFormat::Indexed4 { palette, trns },
+        8 => PixelFormat::Indexed8 { palette, trns },
+        _ => unreachable!("bug: validated indexed bit depth must be 1/2/4/8"),
     }
 }
 

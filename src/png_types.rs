@@ -26,62 +26,6 @@ impl CoreError for Error {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BitDepth {
-    One,
-    Two,
-    Four,
-    Eight,
-    Sixteen,
-}
-
-impl BitDepth {
-    pub(crate) fn from_u8(value: u8) -> Option<Self> {
-        match value {
-            1 => Some(Self::One),
-            2 => Some(Self::Two),
-            4 => Some(Self::Four),
-            8 => Some(Self::Eight),
-            16 => Some(Self::Sixteen),
-            _ => None,
-        }
-    }
-
-    pub fn as_u8(self) -> u8 {
-        match self {
-            Self::One => 1,
-            Self::Two => 2,
-            Self::Four => 4,
-            Self::Eight => 8,
-            Self::Sixteen => 16,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ColorMode {
-    Grayscale,
-    GrayscaleAlpha,
-    Rgb,
-    Rgba,
-    Indexed,
-}
-
-impl ColorMode {
-    pub fn has_alpha(&self) -> bool {
-        matches!(self, Self::GrayscaleAlpha | Self::Rgba)
-    }
-
-    pub fn channels(&self) -> u8 {
-        match self {
-            Self::Grayscale | Self::Indexed => 1,
-            Self::GrayscaleAlpha => 2,
-            Self::Rgb => 3,
-            Self::Rgba => 4,
-        }
-    }
-}
-
 /// Describes the pixel layout of image data in a flat `&[u8]` buffer.
 ///
 /// 16-bit samples are stored in big-endian byte order (matching the PNG wire
@@ -89,9 +33,16 @@ impl ColorMode {
 /// sample/index.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PixelFormat {
-    /// Grayscale with 1/2/4/8-bit samples (1 byte per sample, unpacked) or
-    /// 16-bit samples (2 bytes per sample, big-endian).
-    Gray { bit_depth: BitDepth },
+    /// 1-bit grayscale, 1 byte per sample (unpacked).
+    Gray1,
+    /// 2-bit grayscale, 1 byte per sample (unpacked).
+    Gray2,
+    /// 4-bit grayscale, 1 byte per sample (unpacked).
+    Gray4,
+    /// 8-bit grayscale, 1 byte per sample.
+    Gray8,
+    /// 16-bit grayscale, 2 bytes per sample (big-endian).
+    Gray16Be,
     /// Grayscale + alpha, 8-bit (2 bytes per pixel: `[gray, alpha, ...]`).
     GrayAlpha8,
     /// Grayscale + alpha, 16-bit BE (4 bytes per pixel: `[g_hi, g_lo, a_hi, a_lo, ...]`).
@@ -104,9 +55,29 @@ pub enum PixelFormat {
     Rgba8,
     /// RGBA, 16-bit BE (8 bytes per pixel).
     Rgba16Be,
-    /// Indexed color with unpacked 1-byte indices and an embedded palette.
-    Indexed {
-        bit_depth: BitDepth,
+    /// 1-bit indexed color with unpacked 1-byte indices and an embedded palette.
+    Indexed1 {
+        /// Flat RGB triplets (`[r, g, b, r, g, b, ...]`).
+        palette: Vec<u8>,
+        /// Per-index alpha values (may be shorter than the palette).
+        trns: Option<Vec<u8>>,
+    },
+    /// 2-bit indexed color with unpacked 1-byte indices and an embedded palette.
+    Indexed2 {
+        /// Flat RGB triplets (`[r, g, b, r, g, b, ...]`).
+        palette: Vec<u8>,
+        /// Per-index alpha values (may be shorter than the palette).
+        trns: Option<Vec<u8>>,
+    },
+    /// 4-bit indexed color with unpacked 1-byte indices and an embedded palette.
+    Indexed4 {
+        /// Flat RGB triplets (`[r, g, b, r, g, b, ...]`).
+        palette: Vec<u8>,
+        /// Per-index alpha values (may be shorter than the palette).
+        trns: Option<Vec<u8>>,
+    },
+    /// 8-bit indexed color with unpacked 1-byte indices and an embedded palette.
+    Indexed8 {
         /// Flat RGB triplets (`[r, g, b, r, g, b, ...]`).
         palette: Vec<u8>,
         /// Per-index alpha values (may be shorter than the palette).
@@ -115,43 +86,70 @@ pub enum PixelFormat {
 }
 
 impl PixelFormat {
-    /// Returns the bit depth of each sample.
-    pub fn bit_depth(&self) -> BitDepth {
+    /// Returns `true` if this format includes an alpha channel.
+    pub fn has_alpha(&self) -> bool {
+        matches!(
+            self,
+            Self::GrayAlpha8 | Self::GrayAlpha16Be | Self::Rgba8 | Self::Rgba16Be
+        )
+    }
+
+    /// Number of channels per pixel.
+    pub fn channels(&self) -> u8 {
         match self {
-            Self::Gray { bit_depth } | Self::Indexed { bit_depth, .. } => *bit_depth,
-            Self::GrayAlpha8 | Self::Rgb8 | Self::Rgba8 => BitDepth::Eight,
-            Self::GrayAlpha16Be | Self::Rgb16Be | Self::Rgba16Be => BitDepth::Sixteen,
+            Self::Gray1
+            | Self::Gray2
+            | Self::Gray4
+            | Self::Gray8
+            | Self::Gray16Be
+            | Self::Indexed1 { .. }
+            | Self::Indexed2 { .. }
+            | Self::Indexed4 { .. }
+            | Self::Indexed8 { .. } => 1,
+            Self::GrayAlpha8 | Self::GrayAlpha16Be => 2,
+            Self::Rgb8 | Self::Rgb16Be => 3,
+            Self::Rgba8 | Self::Rgba16Be => 4,
         }
     }
 
-    /// Returns the color mode.
-    pub fn color_mode(&self) -> ColorMode {
+    /// Returns `true` if this is an indexed (palette-based) format.
+    pub fn is_indexed(&self) -> bool {
+        matches!(
+            self,
+            Self::Indexed1 { .. }
+                | Self::Indexed2 { .. }
+                | Self::Indexed4 { .. }
+                | Self::Indexed8 { .. }
+        )
+    }
+
+    /// Bit depth of each sample as a raw `u8`.
+    pub fn bit_depth_u8(&self) -> u8 {
         match self {
-            Self::Gray { .. } => ColorMode::Grayscale,
-            Self::GrayAlpha8 | Self::GrayAlpha16Be => ColorMode::GrayscaleAlpha,
-            Self::Rgb8 | Self::Rgb16Be => ColorMode::Rgb,
-            Self::Rgba8 | Self::Rgba16Be => ColorMode::Rgba,
-            Self::Indexed { .. } => ColorMode::Indexed,
+            Self::Gray1 | Self::Indexed1 { .. } => 1,
+            Self::Gray2 | Self::Indexed2 { .. } => 2,
+            Self::Gray4 | Self::Indexed4 { .. } => 4,
+            Self::Gray8 | Self::GrayAlpha8 | Self::Rgb8 | Self::Rgba8 | Self::Indexed8 { .. } => 8,
+            Self::Gray16Be | Self::GrayAlpha16Be | Self::Rgb16Be | Self::Rgba16Be => 16,
         }
     }
 
     /// Bytes per pixel in the flat buffer.
     pub fn bytes_per_pixel(&self) -> usize {
         match self {
-            Self::Gray { bit_depth } => {
-                if *bit_depth == BitDepth::Sixteen {
-                    2
-                } else {
-                    1
-                }
-            }
-            Self::GrayAlpha8 => 2,
-            Self::GrayAlpha16Be => 4,
+            Self::Gray1
+            | Self::Gray2
+            | Self::Gray4
+            | Self::Gray8
+            | Self::Indexed1 { .. }
+            | Self::Indexed2 { .. }
+            | Self::Indexed4 { .. }
+            | Self::Indexed8 { .. } => 1,
+            Self::Gray16Be | Self::GrayAlpha8 => 2,
             Self::Rgb8 => 3,
+            Self::GrayAlpha16Be | Self::Rgba8 => 4,
             Self::Rgb16Be => 6,
-            Self::Rgba8 => 4,
             Self::Rgba16Be => 8,
-            Self::Indexed { .. } => 1,
         }
     }
 

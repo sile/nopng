@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use nopng::{BitDepth, ImageSpec, PixelFormat, decode_image, encode_image};
+use nopng::{ImageSpec, PixelFormat, decode_image, encode_image};
 use proptest::prelude::*;
 
 fn decode_with_png_crate(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), png::DecodingError> {
@@ -122,7 +122,7 @@ proptest! {
         let spec = ImageSpec {
             width,
             height,
-            pixel_format: PixelFormat::Gray { bit_depth: BitDepth::Two },
+            pixel_format: PixelFormat::Gray2,
             interlaced,
         };
         let encoded = encode_image(&spec, &samples).expect("infallible");
@@ -145,8 +145,7 @@ proptest! {
         let spec = ImageSpec {
             width,
             height,
-            pixel_format: PixelFormat::Indexed {
-                bit_depth: BitDepth::Four,
+            pixel_format: PixelFormat::Indexed4 {
                 palette: palette.clone(),
                 trns: Some(trns.clone()),
             },

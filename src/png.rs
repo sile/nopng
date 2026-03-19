@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use crate::chunk::{IdatChunk, IendChunk, IhdrChunk, PlteChunk, TrnsChunk};
 use crate::pixel_reformat::validate_format_and_data;
 
-pub use crate::png_types::{BitDepth, Error, PixelFormat, Result};
+pub use crate::png_types::{Error, PixelFormat, Result};
 
 pub(crate) const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 pub(crate) const ADAM7_PASSES: [Adam7Pass; 7] = [
@@ -99,12 +99,15 @@ fn pixel_format_from_header(
     ancillary: &crate::png_decode::AncillaryChunks,
 ) -> PixelFormat {
     match (header.color_type, header.bit_depth) {
-        (0, 1 | 2 | 4) => {
+        (0, bd @ (1 | 2 | 4)) => {
             if ancillary.has_transparency() {
                 PixelFormat::GrayAlpha8
             } else {
-                PixelFormat::Gray {
-                    bit_depth: BitDepth::from_u8(header.bit_depth).unwrap(),
+                match bd {
+                    1 => PixelFormat::Gray1,
+                    2 => PixelFormat::Gray2,
+                    4 => PixelFormat::Gray4,
+                    _ => unreachable!(),
                 }
             }
         }
@@ -112,18 +115,14 @@ fn pixel_format_from_header(
             if ancillary.has_transparency() {
                 PixelFormat::GrayAlpha8
             } else {
-                PixelFormat::Gray {
-                    bit_depth: BitDepth::Eight,
-                }
+                PixelFormat::Gray8
             }
         }
         (0, 16) => {
             if ancillary.has_transparency() {
                 PixelFormat::GrayAlpha16Be
             } else {
-                PixelFormat::Gray {
-                    bit_depth: BitDepth::Sixteen,
-                }
+                PixelFormat::Gray16Be
             }
         }
         (2, 8) => {
@@ -140,13 +139,15 @@ fn pixel_format_from_header(
                 PixelFormat::Rgb16Be
             }
         }
-        (3, _) => {
+        (3, bd) => {
             let palette = ancillary.flat_palette().unwrap_or_default();
             let trns = ancillary.indexed_trns();
-            PixelFormat::Indexed {
-                bit_depth: BitDepth::from_u8(header.bit_depth).unwrap(),
-                palette,
-                trns,
+            match bd {
+                1 => PixelFormat::Indexed1 { palette, trns },
+                2 => PixelFormat::Indexed2 { palette, trns },
+                4 => PixelFormat::Indexed4 { palette, trns },
+                8 => PixelFormat::Indexed8 { palette, trns },
+                _ => unreachable!(),
             }
         }
         (4, 8) => PixelFormat::GrayAlpha8,
@@ -258,8 +259,8 @@ mod tests {
     use alloc::{vec, vec::Vec};
 
     use super::{
-        BitDepth, Error, IhdrChunk, ImageSpec, PNG_SIGNATURE, PixelFormat, decode_image,
-        decode_image_into, encode_image,
+        Error, IhdrChunk, ImageSpec, PNG_SIGNATURE, PixelFormat, decode_image, decode_image_into,
+        encode_image,
     };
 
     #[test]
@@ -292,8 +293,7 @@ mod tests {
         let spec = ImageSpec {
             width: 4,
             height: 1,
-            pixel_format: PixelFormat::Indexed {
-                bit_depth: BitDepth::Two,
+            pixel_format: PixelFormat::Indexed2 {
                 palette: palette.clone(),
                 trns: Some(trns.clone()),
             },
@@ -354,8 +354,7 @@ mod tests {
         let spec = ImageSpec {
             width: 2,
             height: 1,
-            pixel_format: PixelFormat::Indexed {
-                bit_depth: BitDepth::Two,
+            pixel_format: PixelFormat::Indexed2 {
                 palette: vec![0, 0, 0, 255, 255, 255],
                 trns: None,
             },
@@ -464,8 +463,7 @@ mod tests {
         let spec = ImageSpec {
             width: 2,
             height: 2,
-            pixel_format: PixelFormat::Indexed {
-                bit_depth: BitDepth::Eight,
+            pixel_format: PixelFormat::Indexed8 {
                 palette: palette.clone(),
                 trns: Some(trns.clone()),
             },
@@ -494,9 +492,7 @@ mod tests {
         let spec = ImageSpec {
             width: 2,
             height: 2,
-            pixel_format: PixelFormat::Gray {
-                bit_depth: BitDepth::Sixteen,
-            },
+            pixel_format: PixelFormat::Gray16Be,
             interlaced: false,
         };
         let bytes = encode_image(&spec, &data).expect("infallible");
@@ -512,8 +508,7 @@ mod tests {
         let spec = ImageSpec {
             width: 3,
             height: 2,
-            pixel_format: PixelFormat::Indexed {
-                bit_depth: BitDepth::Eight,
+            pixel_format: PixelFormat::Indexed8 {
                 palette: palette.clone(),
                 trns: Some(trns.clone()),
             },

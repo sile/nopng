@@ -1,4 +1,4 @@
-use nopng::{BitDepth, ColorMode, Error, ImageSpec, PixelFormat, decode_image, encode_image};
+use nopng::{Error, ImageSpec, PixelFormat, decode_image, encode_image};
 
 fn rgba8(spec: &ImageSpec, data: &[u8]) -> Vec<u8> {
     spec.pixel_format
@@ -26,11 +26,10 @@ fn reads_image_spec_from_ihdr() {
         ImageSpec::from_bytes(include_bytes!("data/gray16_interlaced.png")).expect("infallible");
     assert_eq!(spec.width, 5);
     assert_eq!(spec.height, 4);
-    assert_eq!(spec.pixel_format.bit_depth(), BitDepth::Sixteen);
-    // from_bytes now reads tRNS and promotes to GrayscaleAlpha if present.
+    assert_eq!(spec.pixel_format.bit_depth_u8(), 16);
     assert!(matches!(
-        spec.pixel_format.color_mode(),
-        ColorMode::Grayscale | ColorMode::GrayscaleAlpha
+        spec.pixel_format,
+        PixelFormat::Gray16Be | PixelFormat::GrayAlpha16Be
     ));
     assert!(spec.interlaced);
 }
@@ -81,7 +80,7 @@ fn decodes_1bit_grayscale_png() {
         decode_image(include_bytes!("data/gray_1bit_filters.png")).expect("infallible");
     assert_eq!(spec.width, 5);
     assert_eq!(spec.height, 2);
-    assert_eq!(spec.pixel_format.bit_depth(), BitDepth::One);
+    assert_eq!(spec.pixel_format.bit_depth_u8(), 1);
     assert_eq!(
         rgba8(&spec, &data),
         &[
@@ -121,7 +120,7 @@ fn decodes_16bit_rgba() {
     let (spec, data) = decode_image(include_bytes!("data/rgba16.png")).expect("infallible");
     assert_eq!(spec.width, 2);
     assert_eq!(spec.height, 1);
-    assert_eq!(spec.pixel_format.bit_depth(), BitDepth::Sixteen);
+    assert_eq!(spec.pixel_format.bit_depth_u8(), 16);
     // Reformat to RGBA8 for comparison.
     assert_eq!(rgba8(&spec, &data), &[255, 128, 0, 255, 18, 171, 255, 1,]);
 }
@@ -149,7 +148,7 @@ fn decodes_palette_interlaced() {
         decode_image(include_bytes!("data/palette_interlaced.png")).expect("infallible");
     assert!(spec.width > 0);
     assert!(spec.height > 0);
-    assert_eq!(spec.pixel_format.color_mode(), ColorMode::Indexed);
+    assert!(spec.pixel_format.is_indexed());
     // Verify we can roundtrip through RGBA.
     let rgba = rgba8(&spec, &data);
     assert!(!rgba.is_empty());
@@ -161,10 +160,10 @@ fn decodes_gray16_interlaced() {
         decode_image(include_bytes!("data/gray16_interlaced.png")).expect("infallible");
     assert_eq!(spec.width, 5);
     assert_eq!(spec.height, 4);
-    assert_eq!(spec.pixel_format.bit_depth(), BitDepth::Sixteen);
+    assert_eq!(spec.pixel_format.bit_depth_u8(), 16);
     assert!(matches!(
-        spec.pixel_format.color_mode(),
-        ColorMode::Grayscale | ColorMode::GrayscaleAlpha
+        spec.pixel_format,
+        PixelFormat::Gray16Be | PixelFormat::GrayAlpha16Be
     ));
     let rgba = rgba8(&spec, &data);
     assert_eq!(rgba.len(), 5 * 4 * 4);

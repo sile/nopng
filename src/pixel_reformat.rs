@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use crate::png_types::{BitDepth, Error, PixelFormat, Result};
+use crate::png_types::{Error, PixelFormat, Result};
 
 pub(crate) fn reformat(
     src_fmt: &PixelFormat,
@@ -17,10 +17,17 @@ pub(crate) fn reformat(
         PixelFormat::Rgba16Be => to_rgba16be(src_fmt, src),
         PixelFormat::Rgb8 => to_rgb8(src_fmt, src),
         PixelFormat::Rgb16Be => to_rgb16be(src_fmt, src),
-        PixelFormat::Gray { bit_depth } => to_gray(src_fmt, src, *bit_depth),
+        PixelFormat::Gray1
+        | PixelFormat::Gray2
+        | PixelFormat::Gray4
+        | PixelFormat::Gray8
+        | PixelFormat::Gray16Be => to_gray(src_fmt, src, dst_fmt.bit_depth_u8()),
         PixelFormat::GrayAlpha8 => to_grayalpha8(src_fmt, src),
         PixelFormat::GrayAlpha16Be => to_grayalpha16be(src_fmt, src),
-        PixelFormat::Indexed { .. } => Err(Error::Unsupported(
+        PixelFormat::Indexed1 { .. }
+        | PixelFormat::Indexed2 { .. }
+        | PixelFormat::Indexed4 { .. }
+        | PixelFormat::Indexed8 { .. } => Err(Error::Unsupported(
             "reformatting to indexed format is not supported".into(),
         )),
     }
@@ -74,24 +81,20 @@ fn to_rgba8(src_fmt: &PixelFormat, src: &[u8]) -> Result<Vec<u8>> {
             }
             Ok(out)
         }
-        PixelFormat::Gray { bit_depth } => {
-            let bpp = if *bit_depth == BitDepth::Sixteen {
-                2
-            } else {
-                1
-            };
-            let pixel_count = src.len() / bpp;
-            let mut out = Vec::with_capacity(pixel_count * 4);
-            if *bit_depth == BitDepth::Sixteen {
-                let (chunks, _) = src.as_chunks::<2>();
-                for &[hi, _lo] in chunks {
-                    out.extend_from_slice(&[hi, hi, hi, 255]);
-                }
-            } else {
-                for &sample in src {
-                    let gray = scale_sample_to_u8(u16::from(sample), bit_depth.as_u8());
-                    out.extend_from_slice(&[gray, gray, gray, 255]);
-                }
+        PixelFormat::Gray16Be => {
+            let (chunks, _) = src.as_chunks::<2>();
+            let mut out = Vec::with_capacity(chunks.len() * 4);
+            for &[hi, _lo] in chunks {
+                out.extend_from_slice(&[hi, hi, hi, 255]);
+            }
+            Ok(out)
+        }
+        PixelFormat::Gray1 | PixelFormat::Gray2 | PixelFormat::Gray4 | PixelFormat::Gray8 => {
+            let bit_depth = src_fmt.bit_depth_u8();
+            let mut out = Vec::with_capacity(src.len() * 4);
+            for &sample in src {
+                let gray = scale_sample_to_u8(u16::from(sample), bit_depth);
+                out.extend_from_slice(&[gray, gray, gray, 255]);
             }
             Ok(out)
         }
@@ -113,7 +116,10 @@ fn to_rgba8(src_fmt: &PixelFormat, src: &[u8]) -> Result<Vec<u8>> {
             }
             Ok(out)
         }
-        PixelFormat::Indexed { palette, trns, .. } => {
+        PixelFormat::Indexed1 { palette, trns, .. }
+        | PixelFormat::Indexed2 { palette, trns, .. }
+        | PixelFormat::Indexed4 { palette, trns, .. }
+        | PixelFormat::Indexed8 { palette, trns, .. } => {
             let mut out = Vec::with_capacity(src.len() * 4);
             for &index in src {
                 let rgb_offset = usize::from(index) * 3;
@@ -159,9 +165,7 @@ fn to_rgba16be(src_fmt: &PixelFormat, src: &[u8]) -> Result<Vec<u8>> {
             }
             Ok(out)
         }
-        PixelFormat::Gray {
-            bit_depth: BitDepth::Sixteen,
-        } => {
+        PixelFormat::Gray16Be => {
             let (chunks, _) = src.as_chunks::<2>();
             let mut out = Vec::with_capacity(chunks.len() * 8);
             for chunk in chunks {
@@ -235,44 +239,53 @@ fn to_rgb16be(src_fmt: &PixelFormat, src: &[u8]) -> Result<Vec<u8>> {
 
 // ── Conversion to Gray ──────────────────────────────────────────────────
 
-fn to_gray(src_fmt: &PixelFormat, src: &[u8], dst_depth: BitDepth) -> Result<Vec<u8>> {
-    match (src_fmt, dst_depth) {
-        (PixelFormat::Gray { bit_depth }, _) if *bit_depth == dst_depth => Ok(src.to_vec()),
-        (PixelFormat::Gray { bit_depth }, BitDepth::Eight) => {
-            if *bit_depth == BitDepth::Sixteen {
-                let (chunks, _) = src.as_chunks::<2>();
-                Ok(chunks.iter().map(|[hi, _lo]| *hi).collect())
-            } else {
-                Ok(src
-                    .iter()
-                    .map(|&s| scale_sample_to_u8(u16::from(s), bit_depth.as_u8()))
-                    .collect())
-            }
-        }
-        _ if dst_depth == BitDepth::Eight => {
-            let rgba8 = to_rgba8(src_fmt, src)?;
-            let (chunks, _) = rgba8.as_chunks::<4>();
-            Ok(chunks
-                .iter()
-                .map(|[r, g, b, _]| rgb_to_gray8(*r, *g, *b))
-                .collect())
-        }
-        _ if dst_depth == BitDepth::Sixteen => {
-            let rgba16 = to_rgba16be(src_fmt, src)?;
-            let (chunks, _) = rgba16.as_chunks::<8>();
-            let mut out = Vec::with_capacity(chunks.len() * 2);
-            for chunk in chunks {
-                let r = u16::from_be_bytes([chunk[0], chunk[1]]);
-                let g = u16::from_be_bytes([chunk[2], chunk[3]]);
-                let b = u16::from_be_bytes([chunk[4], chunk[5]]);
-                out.extend_from_slice(&rgb_to_gray16(r, g, b).to_be_bytes());
-            }
-            Ok(out)
-        }
-        _ => Err(Error::Unsupported(
-            "unsupported gray bit depth conversion".into(),
-        )),
+fn to_gray(src_fmt: &PixelFormat, src: &[u8], dst_depth: u8) -> Result<Vec<u8>> {
+    let src_depth = src_fmt.bit_depth_u8();
+    let src_is_gray = matches!(
+        src_fmt,
+        PixelFormat::Gray1
+            | PixelFormat::Gray2
+            | PixelFormat::Gray4
+            | PixelFormat::Gray8
+            | PixelFormat::Gray16Be
+    );
+    if src_is_gray && src_depth == dst_depth {
+        return Ok(src.to_vec());
     }
+    if src_is_gray && dst_depth == 8 {
+        if src_depth == 16 {
+            let (chunks, _) = src.as_chunks::<2>();
+            return Ok(chunks.iter().map(|[hi, _lo]| *hi).collect());
+        } else {
+            return Ok(src
+                .iter()
+                .map(|&s| scale_sample_to_u8(u16::from(s), src_depth))
+                .collect());
+        }
+    }
+    if dst_depth == 8 {
+        let rgba8 = to_rgba8(src_fmt, src)?;
+        let (chunks, _) = rgba8.as_chunks::<4>();
+        return Ok(chunks
+            .iter()
+            .map(|[r, g, b, _]| rgb_to_gray8(*r, *g, *b))
+            .collect());
+    }
+    if dst_depth == 16 {
+        let rgba16 = to_rgba16be(src_fmt, src)?;
+        let (chunks, _) = rgba16.as_chunks::<8>();
+        let mut out = Vec::with_capacity(chunks.len() * 2);
+        for chunk in chunks {
+            let r = u16::from_be_bytes([chunk[0], chunk[1]]);
+            let g = u16::from_be_bytes([chunk[2], chunk[3]]);
+            let b = u16::from_be_bytes([chunk[4], chunk[5]]);
+            out.extend_from_slice(&rgb_to_gray16(r, g, b).to_be_bytes());
+        }
+        return Ok(out);
+    }
+    Err(Error::Unsupported(
+        "unsupported gray bit depth conversion".into(),
+    ))
 }
 
 // ── Conversion to GrayAlpha8 ────────────────────────────────────────────
@@ -359,30 +372,24 @@ pub(crate) fn validate_format_and_data(
         ));
     }
     match format {
-        PixelFormat::Gray { bit_depth } => {
-            validate_gray_format(*bit_depth)?;
-            if *bit_depth != BitDepth::Sixteen {
-                validate_sample_range(data, bit_depth.as_u8())?;
-            }
+        PixelFormat::Gray1 | PixelFormat::Gray2 | PixelFormat::Gray4 => {
+            validate_sample_range(data, format.bit_depth_u8())?;
         }
-        PixelFormat::Indexed {
-            bit_depth,
-            palette,
-            trns,
-        } => {
-            validate_indexed_format(*bit_depth, data, palette, trns.as_deref())?;
+        PixelFormat::Indexed1 { palette, trns, .. } => {
+            validate_indexed_format(1, data, palette, trns.as_deref())?;
+        }
+        PixelFormat::Indexed2 { palette, trns, .. } => {
+            validate_indexed_format(2, data, palette, trns.as_deref())?;
+        }
+        PixelFormat::Indexed4 { palette, trns, .. } => {
+            validate_indexed_format(4, data, palette, trns.as_deref())?;
+        }
+        PixelFormat::Indexed8 { palette, trns, .. } => {
+            validate_indexed_format(8, data, palette, trns.as_deref())?;
         }
         _ => {}
     }
     Ok(())
-}
-
-fn validate_gray_format(bit_depth: BitDepth) -> Result<()> {
-    match bit_depth {
-        BitDepth::One | BitDepth::Two | BitDepth::Four | BitDepth::Eight | BitDepth::Sixteen => {
-            Ok(())
-        }
-    }
 }
 
 fn validate_sample_range(samples: &[u8], bit_depth: u8) -> Result<()> {
@@ -397,19 +404,11 @@ fn validate_sample_range(samples: &[u8], bit_depth: u8) -> Result<()> {
 }
 
 fn validate_indexed_format(
-    bit_depth: BitDepth,
+    bit_depth: u8,
     indices: &[u8],
     palette: &[u8],
     trns: Option<&[u8]>,
 ) -> Result<()> {
-    match bit_depth {
-        BitDepth::One | BitDepth::Two | BitDepth::Four | BitDepth::Eight => {}
-        BitDepth::Sixteen => {
-            return Err(Error::InvalidData(
-                "indexed pixels do not support 16-bit depth".into(),
-            ));
-        }
-    }
     if palette.is_empty() || !palette.len().is_multiple_of(3) {
         return Err(Error::InvalidData(
             "indexed palette length must be a non-zero multiple of 3".into(),
@@ -428,13 +427,13 @@ fn validate_indexed_format(
             "indexed transparency table is longer than the palette".into(),
         ));
     }
-    let capacity = 1usize << bit_depth.as_u8();
+    let capacity = 1usize << bit_depth;
     if palette_len > capacity {
         return Err(Error::InvalidData(
             alloc::format!(
                 "palette of size {} does not fit in {}-bit indexed pixels",
                 palette_len,
-                bit_depth.as_u8()
+                bit_depth
             )
             .into(),
         ));
