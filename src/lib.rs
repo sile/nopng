@@ -55,6 +55,58 @@
 //! println!("{}x{}", spec.width, spec.height);
 //! # Ok::<(), nopng::Error>(())
 //! ```
+//!
+//! Inspect, decode, and conditionally reformat:
+//!
+//! ```
+//! # let png_bytes = nopng::encode_image(
+//! #     &nopng::ImageSpec::new(2, 2, nopng::PixelFormat::Gray8),
+//! #     &[0, 64, 128, 255],
+//! # )?;
+//! let info = nopng::inspect_image(&png_bytes)?;
+//! let (spec, pixels) = nopng::decode_image(&png_bytes)?;
+//!
+//! // Only reformat when the native format isn't already RGBA8.
+//! let rgba = if spec.pixel_format == nopng::PixelFormat::Rgba8 {
+//!     pixels
+//! } else {
+//!     nopng::reformat_pixels(&spec.pixel_format, &pixels, &nopng::PixelFormat::Rgba8)?
+//! };
+//! assert_eq!(rgba.len(), info.width as usize * info.height as usize * 4);
+//! # Ok::<(), nopng::Error>(())
+//! ```
+//!
+//! Encode a 4-colour indexed (palette) image:
+//!
+//! ```
+//! let palette = vec![
+//!     255, 0, 0,   // index 0: red
+//!     0, 255, 0,   // index 1: green
+//!     0, 0, 255,   // index 2: blue
+//!     255, 255, 0, // index 3: yellow
+//! ];
+//! let spec = nopng::ImageSpec::new(
+//!     2, 2,
+//!     nopng::PixelFormat::Indexed8 { palette, trns: None },
+//! );
+//! let indices = vec![0, 1, 2, 3]; // one index per pixel
+//! let png_bytes = nopng::encode_image(&spec, &indices)?;
+//! # Ok::<(), nopng::Error>(())
+//! ```
+//!
+//! Convert pixel data between formats without encoding/decoding:
+//!
+//! ```
+//! // RGB8 pixels (3 bytes each)
+//! let rgb = vec![255, 0, 0, 0, 255, 0]; // red, green
+//! let rgba = nopng::reformat_pixels(
+//!     &nopng::PixelFormat::Rgb8,
+//!     &rgb,
+//!     &nopng::PixelFormat::Rgba8,
+//! )?;
+//! assert_eq!(rgba, &[255, 0, 0, 255, 0, 255, 0, 255]);
+//! # Ok::<(), nopng::Error>(())
+//! ```
 
 extern crate alloc;
 
