@@ -26,19 +26,13 @@ Examples
 let spec = nopng::ImageSpec::new(2, 2, nopng::PixelFormat::Rgba8);
 let pixels = vec![255u8; spec.data_len()]; // white, fully opaque
 let png_bytes = nopng::encode_image(&spec, &pixels)?;
-# Ok::<(), nopng::Error>(())
 ```
 
 ### Decode and reformat to RGBA8
 
 ```rust
-# let png_bytes = nopng::encode_image(
-#     &nopng::ImageSpec::new(1, 1, nopng::PixelFormat::Rgba8),
-#     &[255, 0, 0, 255],
-# )?;
 let (spec, pixels) = nopng::decode_image(&png_bytes)?;
 let rgba = nopng::reformat_pixels(&spec.pixel_format, &pixels, &nopng::PixelFormat::Rgba8)?;
-# Ok::<(), nopng::Error>(())
 ```
 
 ### Encode an indexed (palette) image
@@ -56,7 +50,6 @@ let spec = nopng::ImageSpec::new(
 );
 let indices = vec![0, 1, 2, 3]; // one index per pixel
 let png_bytes = nopng::encode_image(&spec, &indices)?;
-# Ok::<(), nopng::Error>(())
 ```
 
 ### Convert pixel data between formats
@@ -70,7 +63,6 @@ let rgba = nopng::reformat_pixels(
     &nopng::PixelFormat::Rgba8,
 )?;
 assert_eq!(rgba, &[255, 0, 0, 255, 0, 255, 0, 255]);
-# Ok::<(), nopng::Error>(())
 ```
 
 Supported Formats
@@ -89,4 +81,4 @@ Adam7 interlace is supported for both encoding and decoding.
 Limitations
 -----------
 
-- Animated PNG (APNG) is not supported
+- Animated PNG (APNG) is not supported yet
