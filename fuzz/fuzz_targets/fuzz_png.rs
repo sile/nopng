@@ -1,7 +1,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use nopng::{ImageSpec, encode_image, decode_image};
+use nopng::{encode_image, decode_image};
 
 fuzz_target!(|data: &[u8]| {
     if let Ok((spec, pixels)) = decode_image(data) {

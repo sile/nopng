@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use nopng::{BitDepth, ColorMode, ImageSpec, Pixels, decode_image, encode_image};
+use nopng::{BitDepth, ImageSpec, PixelFormat, decode_image, encode_image};
 use proptest::prelude::*;
 
 fn decode_with_png_crate(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), png::DecodingError> {
@@ -50,19 +50,14 @@ fn rgba_image_strategy(
 }
 
 fn grayscale_levels_strategy() -> impl Strategy<Value = (u32, u32, Vec<u8>)> {
-    let levels = prop::sample::select(vec![0u8, 85, 170, 255]);
+    // 2-bit grayscale: sample values 0, 1, 2, 3.
+    let levels = prop::sample::select(vec![0u8, 1, 2, 3]);
     (1u32..=8, 1u32..=8).prop_flat_map(move |(width, height)| {
         let pixels = (width * height) as usize;
         (
             Just(width),
             Just(height),
-            proptest::collection::vec((levels.clone(), Just(255u8)), pixels).prop_map(|values| {
-                let mut rgba = Vec::with_capacity(values.len() * 4);
-                for (gray, alpha) in values {
-                    rgba.extend_from_slice(&[gray, gray, gray, alpha]);
-                }
-                rgba
-            }),
+            proptest::collection::vec(levels.clone(), pixels),
         )
     })
 }
@@ -70,39 +65,29 @@ fn grayscale_levels_strategy() -> impl Strategy<Value = (u32, u32, Vec<u8>)> {
 fn rgba16_image_strategy(
     max_width: u32,
     max_height: u32,
-) -> impl Strategy<Value = (u32, u32, Vec<u16>)> {
+) -> impl Strategy<Value = (u32, u32, Vec<u8>)> {
     (1u32..=max_width, 1u32..=max_height).prop_flat_map(|(width, height)| {
-        let len = (width * height * 4) as usize;
+        // 8 bytes per pixel (RGBA16Be)
+        let len = (width * height * 8) as usize;
         (
             Just(width),
             Just(height),
-            proptest::collection::vec(any::<u16>(), len),
+            proptest::collection::vec(any::<u8>(), len),
         )
     })
 }
 
-fn indexed_image_strategy() -> impl Strategy<Value = (u32, u32, Vec<u8>)> {
-    let palette = vec![
-        [255, 0, 0, 255],
-        [0, 255, 0, 128],
-        [0, 0, 255, 255],
-        [255, 255, 0, 64],
-    ];
+fn indexed_image_strategy() -> impl Strategy<Value = (u32, u32, Vec<u8>, Vec<u8>, Vec<u8>)> {
+    let palette = vec![255u8, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0];
+    let trns = vec![255u8, 128, 255, 64];
     (1u32..=8, 1u32..=8).prop_flat_map(move |(width, height)| {
         let pixels = (width * height) as usize;
         (
             Just(width),
             Just(height),
-            proptest::collection::vec(0usize..palette.len(), pixels).prop_map({
-                let palette = palette.clone();
-                move |indices| {
-                    let mut rgba = Vec::with_capacity(indices.len() * 4);
-                    for index in indices {
-                        rgba.extend_from_slice(&palette[index]);
-                    }
-                    rgba
-                }
-            }),
+            proptest::collection::vec(0u8..4, pixels),
+            Just(palette.clone()),
+            Just(trns.clone()),
         )
     })
 }
@@ -115,98 +100,107 @@ proptest! {
     })]
 
     #[test]
-    fn roundtrip_random_rgba((width, height, rgba) in rgba_image_strategy(8, 8)) {
-        let pixels = Pixels::Rgba8(rgba.clone().into());
+    fn roundtrip_random_rgba((width, height, data) in rgba_image_strategy(8, 8)) {
         let spec = ImageSpec {
             width,
             height,
-            color_mode: ColorMode::Rgba,
-            bit_depth: BitDepth::Eight,
+            pixel_format: PixelFormat::Rgba8,
             interlaced: false,
         };
-        let encoded = encode_image(&spec, &pixels).expect("infallible");
+        let encoded = encode_image(&spec, &data).expect("infallible");
 
-        let (decoded_spec, decoded_pixels) = decode_image(&encoded).expect("infallible");
-        let decoded_rgba = decoded_pixels.to_rgba8();
+        let (decoded_spec, decoded_data) = decode_image(&encoded).expect("infallible");
+        let decoded_rgba = decoded_spec.pixel_format.reformat(&decoded_data, &PixelFormat::Rgba8).expect("infallible");
         prop_assert_eq!(decoded_spec.width, width);
         prop_assert_eq!(decoded_spec.height, height);
-        prop_assert_eq!(decoded_rgba.as_u8_storage().expect("infallible"), rgba.as_slice());
+        prop_assert_eq!(decoded_rgba, data);
     }
 
     #[test]
-    fn encoded_png_matches_png_crate_for_grayscale((width, height, rgba) in grayscale_levels_strategy(), interlaced in any::<bool>()) {
-        let pixels = Pixels::Rgba8(rgba.clone().into());
+    fn encoded_png_matches_png_crate_for_grayscale((width, height, samples) in grayscale_levels_strategy(), interlaced in any::<bool>()) {
+        // Encode as grayscale (samples are gray levels that fit in 2-bit).
         let spec = ImageSpec {
             width,
             height,
-            color_mode: ColorMode::Grayscale,
-            bit_depth: BitDepth::Two,
+            pixel_format: PixelFormat::Gray { bit_depth: BitDepth::Two },
             interlaced,
         };
-        let encoded = encode_image(&spec, &pixels).expect("infallible");
+        let encoded = encode_image(&spec, &samples).expect("infallible");
+
+        // Decode with png crate and compare RGBA8 expansion.
+        let (decoded_width, decoded_height, decoded_rgba) =
+            decode_with_png_crate(&encoded).expect("infallible");
+        prop_assert_eq!(decoded_width, width);
+        prop_assert_eq!(decoded_height, height);
+        // Build expected RGBA8 from 2-bit samples (0→0, 1→85, 2→170, 3→255).
+        let expected_rgba: Vec<u8> = samples.iter().flat_map(|&g| {
+            let scaled = ((u32::from(g) * 255) / ((1u32 << 2) - 1)) as u8;
+            [scaled, scaled, scaled, 255]
+        }).collect();
+        prop_assert_eq!(decoded_rgba, expected_rgba);
+    }
+
+    #[test]
+    fn encoded_png_matches_png_crate_for_indexed((width, height, indices, palette, trns) in indexed_image_strategy(), interlaced in any::<bool>()) {
+        let spec = ImageSpec {
+            width,
+            height,
+            pixel_format: PixelFormat::Indexed {
+                bit_depth: BitDepth::Four,
+                palette: palette.clone(),
+                trns: Some(trns.clone()),
+            },
+            interlaced,
+        };
+        let encoded = encode_image(&spec, &indices).expect("infallible");
 
         let (decoded_width, decoded_height, decoded_rgba) =
             decode_with_png_crate(&encoded).expect("infallible");
         prop_assert_eq!(decoded_width, width);
         prop_assert_eq!(decoded_height, height);
-        prop_assert_eq!(decoded_rgba, rgba);
+        // Build expected RGBA8 from palette + trns.
+        let expected_rgba: Vec<u8> = indices.iter().flat_map(|&idx| {
+            let rgb_off = usize::from(idx) * 3;
+            let r = palette[rgb_off];
+            let g = palette[rgb_off + 1];
+            let b = palette[rgb_off + 2];
+            let a = trns.get(usize::from(idx)).copied().unwrap_or(255);
+            [r, g, b, a]
+        }).collect();
+        prop_assert_eq!(decoded_rgba, expected_rgba);
     }
 
     #[test]
-    fn encoded_png_matches_png_crate_for_indexed((width, height, rgba) in indexed_image_strategy(), interlaced in any::<bool>()) {
-        let pixels = Pixels::Rgba8(rgba.clone().into());
+    fn roundtrip_random_rgba_interlaced((width, height, data) in rgba_image_strategy(8, 8)) {
         let spec = ImageSpec {
             width,
             height,
-            color_mode: ColorMode::Indexed,
-            bit_depth: BitDepth::Four,
-            interlaced,
-        };
-        let encoded = encode_image(&spec, &pixels).expect("infallible");
-
-        let (decoded_width, decoded_height, decoded_rgba) =
-            decode_with_png_crate(&encoded).expect("infallible");
-        prop_assert_eq!(decoded_width, width);
-        prop_assert_eq!(decoded_height, height);
-        prop_assert_eq!(decoded_rgba, rgba);
-    }
-
-    #[test]
-    fn roundtrip_random_rgba_interlaced((width, height, rgba) in rgba_image_strategy(8, 8)) {
-        let pixels = Pixels::Rgba8(rgba.clone().into());
-        let spec = ImageSpec {
-            width,
-            height,
-            color_mode: ColorMode::Rgba,
-            bit_depth: BitDepth::Eight,
+            pixel_format: PixelFormat::Rgba8,
             interlaced: true,
         };
-        let encoded = encode_image(&spec, &pixels).expect("infallible");
+        let encoded = encode_image(&spec, &data).expect("infallible");
 
-        let (decoded_spec, decoded_pixels) = decode_image(&encoded).expect("infallible");
-        let decoded_rgba = decoded_pixels.to_rgba8();
+        let (decoded_spec, decoded_data) = decode_image(&encoded).expect("infallible");
+        let decoded_rgba = decoded_spec.pixel_format.reformat(&decoded_data, &PixelFormat::Rgba8).expect("infallible");
         prop_assert_eq!(decoded_spec.width, width);
         prop_assert_eq!(decoded_spec.height, height);
-        prop_assert_eq!(decoded_rgba.as_u8_storage().expect("infallible"), rgba.as_slice());
+        prop_assert_eq!(decoded_rgba, data);
     }
 
     #[test]
-    fn roundtrip_random_rgba16((width, height, samples) in rgba16_image_strategy(8, 8)) {
-        let pixels = Pixels::Rgba16(samples.clone().into());
+    fn roundtrip_random_rgba16((width, height, data) in rgba16_image_strategy(8, 8)) {
         let spec = ImageSpec {
             width,
             height,
-            color_mode: ColorMode::Rgba,
-            bit_depth: BitDepth::Sixteen,
+            pixel_format: PixelFormat::Rgba16Be,
             interlaced: false,
         };
-        let encoded = encode_image(&spec, &pixels).expect("infallible");
+        let encoded = encode_image(&spec, &data).expect("infallible");
 
-        let (decoded_spec, decoded_pixels) = decode_image(&encoded).expect("infallible");
-        let decoded_rgba = decoded_pixels.to_rgba16();
+        let (decoded_spec, decoded_data) = decode_image(&encoded).expect("infallible");
         prop_assert_eq!(decoded_spec.width, width);
         prop_assert_eq!(decoded_spec.height, height);
-        prop_assert_eq!(decoded_rgba.as_u16_storage().expect("infallible"), samples.as_slice());
+        prop_assert_eq!(decoded_data, data);
     }
 
     #[test]
