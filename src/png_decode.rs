@@ -821,7 +821,7 @@ fn convert_to_rgba16be(
         }
         (CT_INDEXED, 1 | 2 | 4 | 8) => {
             let (fmt, indices) = convert_indexed(header, width, raw, ancillary)?;
-            let expanded = fmt.reformat(&indices, &PixelFormat::Rgba16Be)?;
+            let expanded = crate::pixel_reformat::reformat(&fmt, &indices, &PixelFormat::Rgba16Be)?;
             rgba.extend(expanded);
         }
         (CT_GRAY_ALPHA, 8) => {

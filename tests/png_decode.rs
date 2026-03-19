@@ -1,18 +1,19 @@
-use nopng::{Error, ImageSpec, PixelFormat, decode_image, encode_image};
+use nopng::{Error, ImageSpec, PixelFormat, decode_image, encode_image, inspect_image};
 
-fn rgba8(spec: &ImageSpec, data: &[u8]) -> Vec<u8> {
-    spec.pixel_format
-        .reformat(data, &PixelFormat::Rgba8)
-        .expect("infallible")
+fn rgba8(bytes: &[u8]) -> Vec<u8> {
+    let (spec, data) = decode_image(bytes, Some(&PixelFormat::Rgba8)).expect("infallible");
+    assert_eq!(data.len(), spec.data_len());
+    data
 }
 
 #[test]
 fn decodes_grayscale_png() {
-    let (spec, data) = decode_image(include_bytes!("data/gray_filters.png")).expect("infallible");
+    let (spec, _) =
+        decode_image(include_bytes!("data/gray_filters.png"), None).expect("infallible");
     assert_eq!(spec.width, 3);
     assert_eq!(spec.height, 2);
     assert_eq!(
-        rgba8(&spec, &data),
+        rgba8(include_bytes!("data/gray_filters.png")),
         &[
             0, 0, 0, 255, 127, 127, 127, 255, 255, 255, 255, 255, 10, 10, 10, 255, 140, 140, 140,
             255, 200, 200, 200, 255,
@@ -22,11 +23,9 @@ fn decodes_grayscale_png() {
 
 #[test]
 fn reads_image_spec_from_ihdr() {
-    let spec =
-        ImageSpec::from_bytes(include_bytes!("data/gray16_interlaced.png")).expect("infallible");
+    let spec = inspect_image(include_bytes!("data/gray16_interlaced.png")).expect("infallible");
     assert_eq!(spec.width, 5);
     assert_eq!(spec.height, 4);
-    assert_eq!(spec.pixel_format.bit_depth_u8(), 16);
     assert!(matches!(
         spec.pixel_format,
         PixelFormat::Gray16Be | PixelFormat::GrayAlpha16Be
@@ -36,11 +35,12 @@ fn reads_image_spec_from_ihdr() {
 
 #[test]
 fn decodes_grayscale_alpha_png() {
-    let (spec, data) = decode_image(include_bytes!("data/gray_alpha_avg.png")).expect("infallible");
+    let (spec, _) =
+        decode_image(include_bytes!("data/gray_alpha_avg.png"), None).expect("infallible");
     assert_eq!(spec.width, 2);
     assert_eq!(spec.height, 2);
     assert_eq!(
-        rgba8(&spec, &data),
+        rgba8(include_bytes!("data/gray_alpha_avg.png")),
         &[
             20, 20, 20, 255, 180, 180, 180, 64, 100, 100, 100, 128, 220, 220, 220, 200,
         ]
@@ -49,11 +49,11 @@ fn decodes_grayscale_alpha_png() {
 
 #[test]
 fn decodes_rgb_png() {
-    let (spec, data) = decode_image(include_bytes!("data/rgb_sub_up.png")).expect("infallible");
+    let (spec, _) = decode_image(include_bytes!("data/rgb_sub_up.png"), None).expect("infallible");
     assert_eq!(spec.width, 2);
     assert_eq!(spec.height, 2);
     assert_eq!(
-        rgba8(&spec, &data),
+        rgba8(include_bytes!("data/rgb_sub_up.png")),
         &[
             255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255,
         ]
@@ -62,12 +62,12 @@ fn decodes_rgb_png() {
 
 #[test]
 fn decodes_rgba_png_with_split_idat() {
-    let (spec, data) =
-        decode_image(include_bytes!("data/rgba_paeth_split_idat.png")).expect("infallible");
+    let (spec, _) =
+        decode_image(include_bytes!("data/rgba_paeth_split_idat.png"), None).expect("infallible");
     assert_eq!(spec.width, 2);
     assert_eq!(spec.height, 2);
     assert_eq!(
-        rgba8(&spec, &data),
+        rgba8(include_bytes!("data/rgba_paeth_split_idat.png")),
         &[
             255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 255, 255, 255, 255, 64,
         ]
@@ -76,13 +76,13 @@ fn decodes_rgba_png_with_split_idat() {
 
 #[test]
 fn decodes_1bit_grayscale_png() {
-    let (spec, data) =
-        decode_image(include_bytes!("data/gray_1bit_filters.png")).expect("infallible");
+    let (spec, _) =
+        decode_image(include_bytes!("data/gray_1bit_filters.png"), None).expect("infallible");
     assert_eq!(spec.width, 5);
     assert_eq!(spec.height, 2);
-    assert_eq!(spec.pixel_format.bit_depth_u8(), 1);
+    assert!(matches!(spec.pixel_format, PixelFormat::Gray1));
     assert_eq!(
-        rgba8(&spec, &data),
+        rgba8(include_bytes!("data/gray_1bit_filters.png")),
         &[
             0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255,
             255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255, 255,
@@ -92,9 +92,8 @@ fn decodes_1bit_grayscale_png() {
 
 #[test]
 fn decodes_2bit_grayscale_with_trns() {
-    let (spec, data) = decode_image(include_bytes!("data/gray_2bit_trns.png")).expect("infallible");
     assert_eq!(
-        rgba8(&spec, &data),
+        rgba8(include_bytes!("data/gray_2bit_trns.png")),
         &[
             0, 0, 0, 255, 85, 85, 85, 0, 170, 170, 170, 255, 255, 255, 255, 255, 255, 255, 255,
             255, 170, 170, 170, 255, 85, 85, 85, 0, 0, 0, 0, 255,
@@ -104,10 +103,8 @@ fn decodes_2bit_grayscale_with_trns() {
 
 #[test]
 fn decodes_4bit_palette_with_trns() {
-    let (spec, data) =
-        decode_image(include_bytes!("data/palette_4bit_trns.png")).expect("infallible");
     assert_eq!(
-        rgba8(&spec, &data),
+        rgba8(include_bytes!("data/palette_4bit_trns.png")),
         &[
             255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 0, 255, 255, 0, 255, 255, 255, 0, 255, 0, 0,
             255, 0, 0, 255, 0, 128, 255, 0, 0, 255,
@@ -117,20 +114,19 @@ fn decodes_4bit_palette_with_trns() {
 
 #[test]
 fn decodes_16bit_rgba() {
-    let (spec, data) = decode_image(include_bytes!("data/rgba16.png")).expect("infallible");
+    let (spec, _) = decode_image(include_bytes!("data/rgba16.png"), None).expect("infallible");
     assert_eq!(spec.width, 2);
     assert_eq!(spec.height, 1);
-    assert_eq!(spec.pixel_format.bit_depth_u8(), 16);
-    // Reformat to RGBA8 for comparison.
-    assert_eq!(rgba8(&spec, &data), &[255, 128, 0, 255, 18, 171, 255, 1,]);
+    assert_eq!(
+        rgba8(include_bytes!("data/rgba16.png")),
+        &[255, 128, 0, 255, 18, 171, 255, 1,]
+    );
 }
 
 #[test]
 fn decodes_rgba_interlaced() {
-    let (spec, data) =
-        decode_image(include_bytes!("data/rgba_interlaced.png")).expect("infallible");
+    let rgba = rgba8(include_bytes!("data/rgba_interlaced.png"));
     // Re-encode as non-interlaced and verify roundtrip.
-    let rgba = rgba8(&spec, &data);
     let spec2 = ImageSpec {
         width: 4,
         height: 4,
@@ -138,34 +134,38 @@ fn decodes_rgba_interlaced() {
         interlaced: false,
     };
     let bytes = encode_image(&spec2, &rgba).expect("infallible");
-    let (decoded_spec, decoded_data) = decode_image(&bytes).expect("infallible");
-    assert_eq!(rgba8(&decoded_spec, &decoded_data), rgba);
+    assert_eq!(rgba8(&bytes), rgba);
 }
 
 #[test]
 fn decodes_palette_interlaced() {
-    let (spec, data) =
-        decode_image(include_bytes!("data/palette_interlaced.png")).expect("infallible");
+    let (spec, _) =
+        decode_image(include_bytes!("data/palette_interlaced.png"), None).expect("infallible");
     assert!(spec.width > 0);
     assert!(spec.height > 0);
-    assert!(spec.pixel_format.is_indexed());
+    assert!(matches!(
+        spec.pixel_format,
+        PixelFormat::Indexed1 { .. }
+            | PixelFormat::Indexed2 { .. }
+            | PixelFormat::Indexed4 { .. }
+            | PixelFormat::Indexed8 { .. }
+    ));
     // Verify we can roundtrip through RGBA.
-    let rgba = rgba8(&spec, &data);
+    let rgba = rgba8(include_bytes!("data/palette_interlaced.png"));
     assert!(!rgba.is_empty());
 }
 
 #[test]
 fn decodes_gray16_interlaced() {
-    let (spec, data) =
-        decode_image(include_bytes!("data/gray16_interlaced.png")).expect("infallible");
+    let (spec, _) =
+        decode_image(include_bytes!("data/gray16_interlaced.png"), None).expect("infallible");
     assert_eq!(spec.width, 5);
     assert_eq!(spec.height, 4);
-    assert_eq!(spec.pixel_format.bit_depth_u8(), 16);
     assert!(matches!(
         spec.pixel_format,
         PixelFormat::Gray16Be | PixelFormat::GrayAlpha16Be
     ));
-    let rgba = rgba8(&spec, &data);
+    let rgba = rgba8(include_bytes!("data/gray16_interlaced.png"));
     assert_eq!(rgba.len(), 5 * 4 * 4);
 }
 
@@ -174,7 +174,7 @@ fn rejects_crc_mismatch() {
     let mut bytes = include_bytes!("data/gray_filters.png").to_vec();
     let index = bytes.len() - 1;
     bytes[index] ^= 0x01;
-    let error = decode_image(&bytes).expect_err("infallible");
+    let error = decode_image(&bytes, None).expect_err("infallible");
     assert!(matches!(error, Error::InvalidData(message) if message.contains("CRC mismatch")));
 }
 
@@ -183,7 +183,7 @@ fn rejects_missing_plte_for_palette_image() {
     let mut bytes = include_bytes!("data/palette_4bit_trns.png").to_vec();
     remove_chunk(&mut bytes, b"PLTE");
     remove_chunk(&mut bytes, b"tRNS");
-    let error = decode_image(&bytes).expect_err("infallible");
+    let error = decode_image(&bytes, None).expect_err("infallible");
     assert!(matches!(error, Error::InvalidData(message) if message.contains("missing PLTE")));
 }
 

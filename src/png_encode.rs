@@ -30,7 +30,7 @@ impl EncodedImage {
             | PixelFormat::Gray4
             | PixelFormat::Gray8
             | PixelFormat::Gray16Be => {
-                let bd = format.bit_depth_u8();
+                let bd = format.bit_depth();
                 let bpp = if bd < 8 { 1 } else { format.bytes_per_pixel() };
                 let filtered_data = if interlaced {
                     build_scanline_filtered_data_adam7(width, height, data, bd, bpp, format)
@@ -146,7 +146,7 @@ impl EncodedImage {
             | PixelFormat::Indexed2 { palette, trns }
             | PixelFormat::Indexed4 { palette, trns }
             | PixelFormat::Indexed8 { palette, trns } => {
-                let bd = format.bit_depth_u8();
+                let bd = format.bit_depth();
                 let bpp = 1;
                 let filtered_data = if interlaced {
                     build_scanline_filtered_data_adam7(width, height, data, bd, bpp, format)

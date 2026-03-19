@@ -109,11 +109,10 @@ proptest! {
         };
         let encoded = encode_image(&spec, &data).expect("infallible");
 
-        let (decoded_spec, decoded_data) = decode_image(&encoded).expect("infallible");
-        let decoded_rgba = decoded_spec.pixel_format.reformat(&decoded_data, &PixelFormat::Rgba8).expect("infallible");
+        let (decoded_spec, decoded_data) = decode_image(&encoded, Some(&PixelFormat::Rgba8)).expect("infallible");
         prop_assert_eq!(decoded_spec.width, width);
         prop_assert_eq!(decoded_spec.height, height);
-        prop_assert_eq!(decoded_rgba, data);
+        prop_assert_eq!(decoded_data, data);
     }
 
     #[test]
@@ -179,11 +178,10 @@ proptest! {
         };
         let encoded = encode_image(&spec, &data).expect("infallible");
 
-        let (decoded_spec, decoded_data) = decode_image(&encoded).expect("infallible");
-        let decoded_rgba = decoded_spec.pixel_format.reformat(&decoded_data, &PixelFormat::Rgba8).expect("infallible");
+        let (decoded_spec, decoded_data) = decode_image(&encoded, Some(&PixelFormat::Rgba8)).expect("infallible");
         prop_assert_eq!(decoded_spec.width, width);
         prop_assert_eq!(decoded_spec.height, height);
-        prop_assert_eq!(decoded_rgba, data);
+        prop_assert_eq!(decoded_data, data);
     }
 
     #[test]
@@ -196,7 +194,7 @@ proptest! {
         };
         let encoded = encode_image(&spec, &data).expect("infallible");
 
-        let (decoded_spec, decoded_data) = decode_image(&encoded).expect("infallible");
+        let (decoded_spec, decoded_data) = decode_image(&encoded, None).expect("infallible");
         prop_assert_eq!(decoded_spec.width, width);
         prop_assert_eq!(decoded_spec.height, height);
         prop_assert_eq!(decoded_data, data);
@@ -204,6 +202,6 @@ proptest! {
 
     #[test]
     fn decoder_never_panics_on_arbitrary_bytes(data in proptest::collection::vec(any::<u8>(), 0..2048)) {
-        let _ = decode_image(&data);
+        let _ = decode_image(&data, None);
     }
 }

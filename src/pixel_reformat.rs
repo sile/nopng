@@ -21,7 +21,7 @@ pub(crate) fn reformat(
         | PixelFormat::Gray2
         | PixelFormat::Gray4
         | PixelFormat::Gray8
-        | PixelFormat::Gray16Be => to_gray(src_fmt, src, dst_fmt.bit_depth_u8()),
+        | PixelFormat::Gray16Be => to_gray(src_fmt, src, dst_fmt.bit_depth()),
         PixelFormat::GrayAlpha8 => to_grayalpha8(src_fmt, src),
         PixelFormat::GrayAlpha16Be => to_grayalpha16be(src_fmt, src),
         PixelFormat::Indexed1 { .. }
@@ -31,22 +31,6 @@ pub(crate) fn reformat(
             "reformatting to indexed format is not supported".into(),
         )),
     }
-}
-
-pub(crate) fn reformat_into(
-    src_fmt: &PixelFormat,
-    src: &[u8],
-    dst_fmt: &PixelFormat,
-    dst: &mut [u8],
-) -> Result<()> {
-    let result = reformat(src_fmt, src, dst_fmt)?;
-    if dst.len() != result.len() {
-        return Err(Error::InvalidData(
-            "destination buffer size mismatch".into(),
-        ));
-    }
-    dst.copy_from_slice(&result);
-    Ok(())
 }
 
 // ── Conversion to RGBA8 ─────────────────────────────────────────────────
@@ -90,7 +74,7 @@ fn to_rgba8(src_fmt: &PixelFormat, src: &[u8]) -> Result<Vec<u8>> {
             Ok(out)
         }
         PixelFormat::Gray1 | PixelFormat::Gray2 | PixelFormat::Gray4 | PixelFormat::Gray8 => {
-            let bit_depth = src_fmt.bit_depth_u8();
+            let bit_depth = src_fmt.bit_depth();
             let mut out = Vec::with_capacity(src.len() * 4);
             for &sample in src {
                 let gray = scale_sample_to_u8(u16::from(sample), bit_depth);
@@ -240,7 +224,7 @@ fn to_rgb16be(src_fmt: &PixelFormat, src: &[u8]) -> Result<Vec<u8>> {
 // ── Conversion to Gray ──────────────────────────────────────────────────
 
 fn to_gray(src_fmt: &PixelFormat, src: &[u8], dst_depth: u8) -> Result<Vec<u8>> {
-    let src_depth = src_fmt.bit_depth_u8();
+    let src_depth = src_fmt.bit_depth();
     let src_is_gray = matches!(
         src_fmt,
         PixelFormat::Gray1
@@ -365,7 +349,7 @@ pub(crate) fn validate_format_and_data(
             "image dimensions must be non-zero".into(),
         ));
     }
-    let expected = format.data_len(width, height)?;
+    let expected = format.data_len(width, height);
     if data.len() != expected {
         return Err(Error::InvalidData(
             "image size does not match pixel buffer length".into(),
@@ -373,7 +357,7 @@ pub(crate) fn validate_format_and_data(
     }
     match format {
         PixelFormat::Gray1 | PixelFormat::Gray2 | PixelFormat::Gray4 => {
-            validate_sample_range(data, format.bit_depth_u8())?;
+            validate_sample_range(data, format.bit_depth())?;
         }
         PixelFormat::Indexed1 { palette, trns, .. } => {
             validate_indexed_format(1, data, palette, trns.as_deref())?;
