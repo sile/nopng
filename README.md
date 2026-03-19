@@ -6,97 +6,87 @@ nopng
 [![Actions Status](https://github.com/sile/nopng/workflows/CI/badge.svg)](https://github.com/sile/nopng/actions)
 ![License](https://img.shields.io/crates/l/nopng)
 
-A Rust [PNG] library with no dependencies, `no_std`, and no trait-based public API.
+A minimal PNG encoder/decoder with no dependencies and `no_std`.
 
-The `no` in `nopng` stands for:
+Features
+--------
 
-- no dependencies
-- no_std
-- no trait-based public API
+- No dependencies
+- `no_std` (`alloc` only)
+- Decode: all color types (grayscale, truecolor, indexed, with/without alpha, 1–16 bit), Adam7 interlace
+- Encode: all color types, Adam7 interlace
+- `reformat_pixels` for pixel format conversion without a full encode/decode round-trip
 
-[PNG]: https://www.w3.org/TR/PNG/
+Examples
+--------
 
-Supported Decoding
-------------------
-
-- Non-interlaced PNG
-- Adam7 interlaced PNG
-- Color types:
-  - Grayscale: 1/2/4/8/16-bit
-  - Truecolor: 8/16-bit
-  - Indexed-color: 1/2/4/8-bit
-  - Grayscale with alpha: 8/16-bit
-  - Truecolor with alpha: 8/16-bit
-- `PLTE` and `tRNS`
-
-Decoded images are returned as `PngImage<'static>`.
-`PngImage` stores a `PngPixels` enum that preserves the source layout as closely as possible:
-
-- low-bit grayscale is returned as unpacked `Gray { bit_depth, samples }`
-- indexed PNG is returned as `Indexed { bit_depth, indices, palette, trns }`
-- `tRNS` is reflected in the pixel representation
-- 16-bit PNG is returned as native `u16`-backed pixel data
-
-Use `nopng::PngInfo::from_bytes()` if you want to inspect width, height, bit depth, or interlace mode before doing a full decode.
-
-Supported Encoding
-------------------
-
-- `PngImage<'a>` can hold borrowed or owned pixel data
-- Pixel storage is represented by `PngPixels<'a>`
-- `PngImage` stores a concrete `PngEncoding`
-- `to_bytes()` uses `image.encoding()` as-is
-- `PngEncoding::for_pixels()` provides a natural default for a given `PngPixels`
-- `to_bytes()` performs implicit pixel conversion when `pixels` and `encoding` do not exactly match
-
-no_std
-------
-
-- The library itself is `no_std` and uses `alloc`
-- `nopng::PngInfo::from_bytes(&[u8])` reads only the PNG signature and `IHDR`
-- Decoding is byte-based via `PngImage::from_bytes(&[u8])`
-- Encoding is byte-based via `PngImage::to_bytes()`
-- `std` is only needed by callers that want file or console I/O
-
-Example
--------
+### Encode a 2x2 RGBA8 image
 
 ```rust
-fn convert(bytes: &[u8]) -> nopng::Result<Vec<u8>> {
-    let info = nopng::PngInfo::from_bytes(bytes)?;
-    if info.decoded_rgba8_bytes().unwrap_or(usize::MAX) > 16 * 1024 * 1024 {
-        return Err(nopng::Error::InvalidData("image is too large".into()));
-    }
-
-    let mut image = nopng::PngImage::from_bytes(bytes)?;
-    *image.encoding_mut() = nopng::PngEncoding {
-        color_mode: nopng::PngColorMode::Indexed,
-        bit_depth: nopng::PngBitDepth::Four,
-        interlaced: true,
-    };
-    image.to_bytes()
-}
+let spec = nopng::ImageSpec::new(2, 2, nopng::PixelFormat::Rgba8);
+let pixels = vec![255u8; spec.data_len()]; // white, fully opaque
+let png_bytes = nopng::encode_image(&spec, &pixels)?;
+# Ok::<(), nopng::Error>(())
 ```
+
+### Decode and reformat to RGBA8
 
 ```rust
-fn encode_borrowed_rgb(data: &[u8]) -> nopng::Result<Vec<u8>> {
-    let pixels = nopng::PngPixels::infer_from_rgb8(data);
-    let image = nopng::PngImage::new(
-        2,
-        1,
-        pixels,
-        nopng::PngEncoding {
-            color_mode: nopng::PngColorMode::Rgb,
-            bit_depth: nopng::PngBitDepth::Eight,
-            interlaced: false,
-        },
-    )?;
-    image.to_bytes()
-}
+# let png_bytes = nopng::encode_image(
+#     &nopng::ImageSpec::new(1, 1, nopng::PixelFormat::Rgba8),
+#     &[255, 0, 0, 255],
+# )?;
+let (spec, pixels) = nopng::decode_image(&png_bytes)?;
+let rgba = nopng::reformat_pixels(&spec.pixel_format, &pixels, &nopng::PixelFormat::Rgba8)?;
+# Ok::<(), nopng::Error>(())
 ```
 
-TODO
-----
+### Encode an indexed (palette) image
 
-- Streaming / incremental API
-- Animated PNG
+```rust
+let palette = vec![
+    255, 0, 0,   // index 0: red
+    0, 255, 0,   // index 1: green
+    0, 0, 255,   // index 2: blue
+    255, 255, 0, // index 3: yellow
+];
+let spec = nopng::ImageSpec::new(
+    2, 2,
+    nopng::PixelFormat::Indexed8 { palette, trns: None },
+);
+let indices = vec![0, 1, 2, 3]; // one index per pixel
+let png_bytes = nopng::encode_image(&spec, &indices)?;
+# Ok::<(), nopng::Error>(())
+```
+
+### Convert pixel data between formats
+
+```rust
+// RGB8 pixels (3 bytes each)
+let rgb = vec![255, 0, 0, 0, 255, 0]; // red, green
+let rgba = nopng::reformat_pixels(
+    &nopng::PixelFormat::Rgb8,
+    &rgb,
+    &nopng::PixelFormat::Rgba8,
+)?;
+assert_eq!(rgba, &[255, 0, 0, 255, 0, 255, 0, 255]);
+# Ok::<(), nopng::Error>(())
+```
+
+Supported Formats
+-----------------
+
+| Color type             | Bit depths       | Decode | Encode |
+|------------------------|------------------|--------|--------|
+| Grayscale              | 1, 2, 4, 8, 16  | yes    | yes    |
+| Grayscale + alpha      | 8, 16            | yes    | yes    |
+| Truecolor (RGB)        | 8, 16            | yes    | yes    |
+| Truecolor + alpha      | 8, 16            | yes    | yes    |
+| Indexed (palette)      | 1, 2, 4, 8      | yes    | yes    |
+
+Adam7 interlace is supported for both encoding and decoding.
+
+Limitations
+-----------
+
+- Animated PNG (APNG) is not supported
