@@ -16,15 +16,15 @@
 //! # Ok::<(), nopng::Error>(())
 //! ```
 //!
-//! Decode a PNG into RGBA8 pixels:
+//! Decode a PNG and convert to RGBA8:
 //!
 //! ```
 //! # let png_bytes = nopng::encode_image(
 //! #     &nopng::ImageSpec::new(1, 1, nopng::PixelFormat::Rgba8),
 //! #     &[255, 0, 0, 255],
 //! # )?;
-//! let (spec, pixels) = nopng::decode_image(&png_bytes, Some(&nopng::PixelFormat::Rgba8))?;
-//! assert_eq!(pixels.len(), spec.data_len());
+//! let (spec, pixels) = nopng::decode_image(&png_bytes)?;
+//! let rgba = nopng::reformat_pixels(&spec.pixel_format, &pixels, &nopng::PixelFormat::Rgba8)?;
 //! # Ok::<(), nopng::Error>(())
 //! ```
 //!
@@ -35,7 +35,7 @@
 //! #     &nopng::ImageSpec::new(1, 1, nopng::PixelFormat::Rgba8),
 //! #     &[255, 0, 0, 255],
 //! # )?;
-//! let (spec, pixels) = nopng::decode_image(&png_bytes, None)?;
+//! let (spec, pixels) = nopng::decode_image(&png_bytes)?;
 //! match spec.pixel_format {
 //!     nopng::PixelFormat::Rgba8 => { /* 4 bytes per pixel */ }
 //!     nopng::PixelFormat::Gray8 => { /* 1 byte per pixel */ }
@@ -74,4 +74,5 @@ pub use png::ImageSpec;
 pub use png::decode_image;
 pub use png::encode_image;
 pub use png::inspect_image;
+pub use png::reformat_pixels;
 pub use png_types::PixelFormat;

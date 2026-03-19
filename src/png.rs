@@ -83,7 +83,7 @@ pub(crate) const ADAM7_PASSES: [Adam7Pass; 7] = [
 /// #     &nopng::ImageSpec::new(1, 1, nopng::PixelFormat::Rgba8),
 /// #     &[255, 0, 0, 255],
 /// # )?;
-/// let (spec, pixels) = nopng::decode_image(&png_bytes, None)?;
+/// let (spec, pixels) = nopng::decode_image(&png_bytes)?;
 /// assert_eq!(pixels.len(), spec.data_len());
 /// # Ok::<(), nopng::Error>(())
 /// ```
@@ -220,9 +220,8 @@ fn pixel_format_from_header(
 
 /// Decodes PNG bytes into an [`ImageSpec`] and pixel data.
 ///
-/// When `format` is `None` the pixel data is returned in the PNG's native
-/// format. When `Some(&fmt)` is given the data is converted to `fmt` before
-/// returning (and the returned [`ImageSpec::pixel_format`] reflects `fmt`).
+/// The pixel data is returned in the PNG's native format. To convert to a
+/// different format, use [`reformat_pixels`] on the result.
 ///
 /// Low-bit grayscale and indexed images are returned as unpacked samples or
 /// indices (one byte per sample/index). 16-bit samples are in big-endian byte
@@ -236,30 +235,52 @@ fn pixel_format_from_header(
 /// #     &nopng::ImageSpec::new(1, 1, nopng::PixelFormat::Gray8),
 /// #     &[128],
 /// # )?;
-/// // Native format
-/// let (spec, pixels) = nopng::decode_image(&png_bytes, None)?;
+/// // Decode in native format
+/// let (spec, pixels) = nopng::decode_image(&png_bytes)?;
 ///
-/// // Convert to RGBA8
-/// let (spec, pixels) = nopng::decode_image(&png_bytes, Some(&nopng::PixelFormat::Rgba8))?;
+/// // Convert to RGBA8 if needed
+/// let rgba = nopng::reformat_pixels(&spec.pixel_format, &pixels, &nopng::PixelFormat::Rgba8)?;
 /// # Ok::<(), nopng::Error>(())
 /// ```
-pub fn decode_image(bytes: &[u8], format: Option<&PixelFormat>) -> Result<(ImageSpec, Vec<u8>)> {
+pub fn decode_image(bytes: &[u8]) -> Result<(ImageSpec, Vec<u8>)> {
     let (header, _ancillary, native_format, data) = crate::png_decode::decode_png(bytes)?;
-    let mut spec = ImageSpec {
+    let spec = ImageSpec {
         width: header.width,
         height: header.height,
         pixel_format: native_format,
         interlaced: header.interlace_method == 1,
     };
     validate_format_and_data(&spec.pixel_format, &data, spec.width, spec.height)?;
-    match format {
-        Some(fmt) => {
-            let converted = reformat(&spec.pixel_format, &data, fmt)?;
-            spec.pixel_format = fmt.clone();
-            Ok((spec, converted))
-        }
-        None => Ok((spec, data)),
-    }
+    Ok((spec, data))
+}
+
+/// Converts pixel data from one [`PixelFormat`] to another.
+///
+/// This function works on any pixel data, not just data from [`decode_image`].
+/// It can be used to convert between formats before encoding or after decoding.
+///
+/// # Limitations
+///
+/// Converting **to** an indexed format (`Indexed1`/`Indexed2`/`Indexed4`/`Indexed8`)
+/// is not supported and returns [`Error::Unsupported`].
+///
+/// # Examples
+///
+/// ```
+/// # let png_bytes = nopng::encode_image(
+/// #     &nopng::ImageSpec::new(1, 1, nopng::PixelFormat::Gray8),
+/// #     &[128],
+/// # )?;
+/// let (spec, pixels) = nopng::decode_image(&png_bytes)?;
+/// let rgba = nopng::reformat_pixels(&spec.pixel_format, &pixels, &nopng::PixelFormat::Rgba8)?;
+/// # Ok::<(), nopng::Error>(())
+/// ```
+pub fn reformat_pixels(
+    src_fmt: &PixelFormat,
+    src: &[u8],
+    dst_fmt: &PixelFormat,
+) -> Result<Vec<u8>> {
+    reformat(src_fmt, src, dst_fmt)
 }
 
 /// Encodes an image described by `spec` into PNG bytes.
@@ -338,7 +359,7 @@ mod tests {
             interlaced: false,
         };
         let bytes = encode_image(&spec, &data).expect("infallible");
-        let (decoded_spec, decoded_data) = decode_image(&bytes, None).expect("infallible");
+        let (decoded_spec, decoded_data) = decode_image(&bytes).expect("infallible");
         let decoded_rgba = reformat(
             &decoded_spec.pixel_format,
             &decoded_data,
@@ -368,7 +389,7 @@ mod tests {
         let ihdr = read_ihdr(&bytes);
         assert_eq!(ihdr.bit_depth, 2);
         assert_eq!(ihdr.color_type, IhdrChunk::COLOR_TYPE_INDEXED);
-        let (decoded_spec, decoded_data) = decode_image(&bytes, None).expect("infallible");
+        let (decoded_spec, decoded_data) = decode_image(&bytes).expect("infallible");
         let decoded_rgba = reformat(
             &decoded_spec.pixel_format,
             &decoded_data,
@@ -390,7 +411,7 @@ mod tests {
             interlaced: false,
         };
         let bytes = encode_image(&spec, &data).expect("infallible");
-        let (decoded_spec, decoded_data) = decode_image(&bytes, None).expect("infallible");
+        let (decoded_spec, decoded_data) = decode_image(&bytes).expect("infallible");
         let decoded_rgb = reformat(
             &decoded_spec.pixel_format,
             &decoded_data,
@@ -492,7 +513,7 @@ mod tests {
             interlaced: false,
         };
         let bytes = encode_image(&spec, &data).expect("infallible");
-        let (decoded_spec, decoded_data) = decode_image(&bytes, None).expect("infallible");
+        let (decoded_spec, decoded_data) = decode_image(&bytes).expect("infallible");
         let decoded_rgba = reformat(
             &decoded_spec.pixel_format,
             &decoded_data,
@@ -512,7 +533,7 @@ mod tests {
             interlaced: false,
         };
         let bytes = encode_image(&spec, &data).expect("infallible");
-        let (decoded_spec, decoded_data) = decode_image(&bytes, None).expect("infallible");
+        let (decoded_spec, decoded_data) = decode_image(&bytes).expect("infallible");
         let decoded_rgba = reformat(
             &decoded_spec.pixel_format,
             &decoded_data,
@@ -539,7 +560,7 @@ mod tests {
             interlaced: false,
         };
         let bytes = encode_image(&spec, &indices).expect("infallible");
-        let (decoded_spec, decoded_data) = decode_image(&bytes, None).expect("infallible");
+        let (decoded_spec, decoded_data) = decode_image(&bytes).expect("infallible");
         let decoded_rgba = reformat(
             &decoded_spec.pixel_format,
             &decoded_data,
@@ -565,7 +586,7 @@ mod tests {
             interlaced: false,
         };
         let bytes = encode_image(&spec, &data).expect("infallible");
-        let (_, decoded_data) = decode_image(&bytes, None).expect("infallible");
+        let (_, decoded_data) = decode_image(&bytes).expect("infallible");
         assert_eq!(decoded_data, data);
     }
 
@@ -584,7 +605,7 @@ mod tests {
             interlaced: false,
         };
         let bytes = encode_image(&spec, &indices).expect("infallible");
-        let (decoded_spec, decoded_data) = decode_image(&bytes, None).expect("infallible");
+        let (decoded_spec, decoded_data) = decode_image(&bytes).expect("infallible");
         let decoded_rgba = reformat(
             &decoded_spec.pixel_format,
             &decoded_data,

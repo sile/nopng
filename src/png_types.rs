@@ -72,7 +72,7 @@ impl CoreError for Error {
 /// #     &nopng::ImageSpec::new(1, 1, nopng::PixelFormat::Rgba8),
 /// #     &[255, 0, 0, 255],
 /// # )?;
-/// let (spec, pixels) = nopng::decode_image(&png_bytes, None)?;
+/// let (spec, pixels) = nopng::decode_image(&png_bytes)?;
 ///
 /// match spec.pixel_format {
 ///     nopng::PixelFormat::Rgba8 => { /* 4 bytes per pixel */ }

@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use nopng::{ImageSpec, PixelFormat, decode_image, encode_image};
+use nopng::{ImageSpec, PixelFormat, decode_image, encode_image, reformat_pixels};
 use proptest::prelude::*;
 
 fn decode_with_png_crate(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), png::DecodingError> {
@@ -109,7 +109,7 @@ proptest! {
         };
         let encoded = encode_image(&spec, &data).expect("infallible");
 
-        let (decoded_spec, decoded_data) = decode_image(&encoded, Some(&PixelFormat::Rgba8)).expect("infallible");
+        let (decoded_spec, decoded_data) = decode_image(&encoded).expect("infallible");
         prop_assert_eq!(decoded_spec.width, width);
         prop_assert_eq!(decoded_spec.height, height);
         prop_assert_eq!(decoded_data, data);
@@ -178,7 +178,7 @@ proptest! {
         };
         let encoded = encode_image(&spec, &data).expect("infallible");
 
-        let (decoded_spec, decoded_data) = decode_image(&encoded, Some(&PixelFormat::Rgba8)).expect("infallible");
+        let (decoded_spec, decoded_data) = decode_image(&encoded).expect("infallible");
         prop_assert_eq!(decoded_spec.width, width);
         prop_assert_eq!(decoded_spec.height, height);
         prop_assert_eq!(decoded_data, data);
@@ -194,7 +194,7 @@ proptest! {
         };
         let encoded = encode_image(&spec, &data).expect("infallible");
 
-        let (decoded_spec, decoded_data) = decode_image(&encoded, None).expect("infallible");
+        let (decoded_spec, decoded_data) = decode_image(&encoded).expect("infallible");
         prop_assert_eq!(decoded_spec.width, width);
         prop_assert_eq!(decoded_spec.height, height);
         prop_assert_eq!(decoded_data, data);
@@ -202,6 +202,109 @@ proptest! {
 
     #[test]
     fn decoder_never_panics_on_arbitrary_bytes(data in proptest::collection::vec(any::<u8>(), 0..2048)) {
-        let _ = decode_image(&data, None);
+        let _ = decode_image(&data);
+    }
+
+    #[test]
+    fn reformat_identity_returns_same_data((_width, _height, data) in rgba_image_strategy(8, 8)) {
+        let formats: Vec<(PixelFormat, Vec<u8>)> = vec![
+            (PixelFormat::Rgba8, data.clone()),
+            (PixelFormat::Rgb8, {
+                let rgb = reformat_pixels(&PixelFormat::Rgba8, &data, &PixelFormat::Rgb8).unwrap();
+                rgb
+            }),
+            (PixelFormat::Gray8, {
+                let g = reformat_pixels(&PixelFormat::Rgba8, &data, &PixelFormat::Gray8).unwrap();
+                g
+            }),
+            (PixelFormat::GrayAlpha8, {
+                let ga = reformat_pixels(&PixelFormat::Rgba8, &data, &PixelFormat::GrayAlpha8).unwrap();
+                ga
+            }),
+        ];
+        for (fmt, pixels) in &formats {
+            let result = reformat_pixels(fmt, pixels, fmt).expect("identity reformat must succeed");
+            prop_assert_eq!(&result, pixels, "identity reformat changed data for {:?}", fmt);
+        }
+    }
+
+    #[test]
+    fn reformat_to_rgba8_matches_png_crate_for_grayscale((width, height, samples) in grayscale_levels_strategy()) {
+        let spec = ImageSpec {
+            width,
+            height,
+            pixel_format: PixelFormat::Gray2,
+            interlaced: false,
+        };
+        let encoded = encode_image(&spec, &samples).expect("infallible");
+
+        // Decode with nopng + reformat_pixels to RGBA8.
+        let (decoded_spec, decoded_data) = decode_image(&encoded).expect("infallible");
+        let nopng_rgba = reformat_pixels(&decoded_spec.pixel_format, &decoded_data, &PixelFormat::Rgba8).expect("infallible");
+
+        // Compare with png crate.
+        let (_, _, ref_rgba) = decode_with_png_crate(&encoded).expect("infallible");
+        prop_assert_eq!(nopng_rgba, ref_rgba);
+    }
+
+    #[test]
+    fn reformat_to_rgba8_matches_png_crate_for_indexed((width, height, indices, palette, trns) in indexed_image_strategy()) {
+        let spec = ImageSpec {
+            width,
+            height,
+            pixel_format: PixelFormat::Indexed4 {
+                palette: palette.clone(),
+                trns: Some(trns.clone()),
+            },
+            interlaced: false,
+        };
+        let encoded = encode_image(&spec, &indices).expect("infallible");
+
+        let (decoded_spec, decoded_data) = decode_image(&encoded).expect("infallible");
+        let nopng_rgba = reformat_pixels(&decoded_spec.pixel_format, &decoded_data, &PixelFormat::Rgba8).expect("infallible");
+
+        let (_, _, ref_rgba) = decode_with_png_crate(&encoded).expect("infallible");
+        prop_assert_eq!(nopng_rgba, ref_rgba);
+    }
+
+    #[test]
+    fn reformat_rgba8_roundtrip_through_formats((_width, _height, data) in rgba_image_strategy(8, 8)) {
+        // RGBA8 → fmt → RGBA8 should be stable (though not necessarily identical
+        // to the original due to lossy conversions like dropping alpha).
+        let targets = [
+            PixelFormat::Rgba8,
+            PixelFormat::Rgba16Be,
+            PixelFormat::Rgb8,
+            PixelFormat::Rgb16Be,
+            PixelFormat::Gray8,
+            PixelFormat::Gray16Be,
+            PixelFormat::GrayAlpha8,
+            PixelFormat::GrayAlpha16Be,
+        ];
+        let src_fmt = PixelFormat::Rgba8;
+        for dst_fmt in &targets {
+            let converted = reformat_pixels(&src_fmt, &data, dst_fmt).expect("reformat must succeed");
+            // Convert back to RGBA8.
+            let back = reformat_pixels(dst_fmt, &converted, &PixelFormat::Rgba8).expect("reformat back must succeed");
+            // A second round through the same path must be stable (idempotent).
+            let converted2 = reformat_pixels(&PixelFormat::Rgba8, &back, dst_fmt).expect("second reformat must succeed");
+            let back2 = reformat_pixels(dst_fmt, &converted2, &PixelFormat::Rgba8).expect("second reformat back must succeed");
+            prop_assert_eq!(&back, &back2, "reformat not idempotent for {:?}", dst_fmt);
+        }
+    }
+
+    #[test]
+    fn reformat_to_indexed_is_unsupported((_width, _height, data) in rgba_image_strategy(4, 4)) {
+        let palette = vec![0u8; 3];
+        let indexed_formats = [
+            PixelFormat::Indexed1 { palette: palette.clone(), trns: None },
+            PixelFormat::Indexed2 { palette: palette.clone(), trns: None },
+            PixelFormat::Indexed4 { palette: palette.clone(), trns: None },
+            PixelFormat::Indexed8 { palette: palette.clone(), trns: None },
+        ];
+        for dst in &indexed_formats {
+            let result = reformat_pixels(&PixelFormat::Rgba8, &data, dst);
+            prop_assert!(result.is_err(), "reformat to indexed should fail");
+        }
     }
 }
