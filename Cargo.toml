@@ -2,7 +2,7 @@
 name = "nopng"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.94"
+rust-version = "1.88"
 authors = ["Takeru Ohta <phjgt308@gmail.com>"]
 license = "MIT"
 description = "A minimal PNG encoder/decoder with no dependencies and no_std"
