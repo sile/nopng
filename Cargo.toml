@@ -13,6 +13,9 @@ categories = ["multimedia::images", "encoding", "no-std"]
 
 [dependencies]
 
+[dev-dependencies]
+noprop = "0.2.1"
+png = "0.17"
+
 [workspace]
-members = ["pbt"]
 exclude = ["fuzz"]
