@@ -31,11 +31,11 @@ use crate::png_types::{Error, PixelFormat, Result};
 ///
 /// ```
 /// use core::num::NonZeroU16;
-/// use nopng::Delay;
 ///
 /// // 12/100 s = 120 ms
-/// let delay = Delay { num: 12, den: NonZeroU16::new(100).unwrap() };
+/// let delay = nopng::Delay { num: 12, den: NonZeroU16::new(100).ok_or("denominator is zero")? };
 /// assert_eq!(f64::from(delay.num) / f64::from(delay.den.get()), 0.12);
+/// # Ok::<(), &str>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Delay {
@@ -76,8 +76,8 @@ pub enum PlayCount {
 impl PlayCount {
     /// Play the animation exactly once.
     ///
-    /// Equivalent to `PlayCount::Finite(NonZeroU32::new(1).unwrap())`, but
-    /// available in `const` contexts.
+    /// Equivalent to `PlayCount::Finite(NonZeroU32::new(1).expect("1 is non-zero"))`,
+    /// but available in `const` contexts.
     pub const ONCE: PlayCount = match NonZeroU32::new(1) {
         Some(one) => PlayCount::Finite(one),
         // `NonZeroU32::new(1)` is never `None`; this arm exists only because

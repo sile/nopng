@@ -14,8 +14,6 @@
 
 use core::num::{NonZeroU16, NonZeroU32};
 
-use nopng::{Error, PixelFormat};
-
 /// `acTL`/`fcTL` dispose operation values, mirroring the spec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Dispose {
@@ -108,7 +106,11 @@ fn push_chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
 fn idat_of(png: &[u8]) -> Vec<u8> {
     let mut offset = 8;
     while offset + 12 <= png.len() {
-        let len = u32::from_be_bytes(png[offset..offset + 4].try_into().unwrap()) as usize;
+        let len = u32::from_be_bytes(
+            png[offset..offset + 4]
+                .try_into()
+                .expect("4 bytes from a 4-byte slice"),
+        ) as usize;
         let kind = &png[offset + 4..offset + 8];
         if kind == b"IDAT" {
             return png[offset + 8..offset + 8 + len].to_vec();
@@ -120,7 +122,8 @@ fn idat_of(png: &[u8]) -> Vec<u8> {
 
 /// The IHDR payload of an encoded PNG (width, height, bit depth, color type).
 fn ihdr_of(png: &[u8]) -> [u8; 13] {
-    let len = u32::from_be_bytes(png[8..12].try_into().unwrap()) as usize;
+    let len =
+        u32::from_be_bytes(png[8..12].try_into().expect("4 bytes from a 4-byte slice")) as usize;
     assert_eq!(&png[12..16], b"IHDR");
     let mut out = [0u8; 13];
     out.copy_from_slice(&png[16..16 + len]);
@@ -129,7 +132,7 @@ fn ihdr_of(png: &[u8]) -> [u8; 13] {
 
 /// Encodes one rectangle of RGBA8 pixels to a PNG and returns its zlib stream.
 fn zlib_for_rect(frame: &FrameSpec, interlaced: bool) -> Vec<u8> {
-    let mut spec = nopng::ImageSpec::new(frame.width, frame.height, PixelFormat::Rgba8);
+    let mut spec = nopng::ImageSpec::new(frame.width, frame.height, nopng::PixelFormat::Rgba8);
     spec.interlaced = interlaced;
     let png = nopng::encode_image(&spec, &frame.pixels).expect("infallible");
     idat_of(&png)
@@ -172,7 +175,8 @@ fn build_apng_interlaced(
     // IHDR: reuse the static encoder's header for the first frame so the bit
     // depth and color type are guaranteed consistent with the pixel data.
     let first = &frames[0];
-    let mut probe_spec = nopng::ImageSpec::new(first.width, first.height, PixelFormat::Rgba8);
+    let mut probe_spec =
+        nopng::ImageSpec::new(first.width, first.height, nopng::PixelFormat::Rgba8);
     probe_spec.interlaced = interlaced;
     let probe = nopng::encode_image(&probe_spec, &first.pixels).expect("infallible");
     let mut ihdr = ihdr_of(&probe);
@@ -233,7 +237,7 @@ fn build_apng_interlaced(
 /// Decodes to RGBA8 and returns `(delay_pairs, play_count, frames)`.
 fn decode_rgba8(bytes: &[u8]) -> (nopng::Animation, Vec<(u16, u16)>) {
     let animation =
-        nopng::decode_animation(bytes, PixelFormat::Rgba8).expect("decode must succeed");
+        nopng::decode_animation(bytes, nopng::PixelFormat::Rgba8).expect("decode must succeed");
     let delays = animation
         .frames
         .iter()
@@ -509,10 +513,13 @@ fn zero_delay_denominator_normalizes_to_100() {
 
     let (animation, delays) = decode_rgba8(&bytes);
     assert_eq!(delays, vec![(5, 100)]);
-    assert_eq!(animation.frames[0].delay.den, NonZeroU16::new(100).unwrap());
+    assert_eq!(
+        animation.frames[0].delay.den,
+        NonZeroU16::new(100).expect("100 is non-zero")
+    );
     assert_eq!(
         animation.play_count,
-        nopng::PlayCount::Finite(NonZeroU32::new(1).unwrap())
+        nopng::PlayCount::Finite(NonZeroU32::new(1).expect("1 is non-zero"))
     );
 }
 
@@ -532,7 +539,7 @@ fn play_count_variants() {
     let many = build_apng(2, core::slice::from_ref(&frame), 7, false, None);
     assert_eq!(
         decode_rgba8(&many).0.play_count,
-        nopng::PlayCount::Finite(NonZeroU32::new(7).unwrap())
+        nopng::PlayCount::Finite(NonZeroU32::new(7).expect("7 is non-zero"))
     );
 }
 
@@ -551,8 +558,8 @@ fn decodes_to_gray8() {
     let first = FrameSpec::full(2, solid(2, RED), Dispose::None, Blend::Source);
     let bytes = build_apng(2, &[first], 0, false, None);
     let animation =
-        nopng::decode_animation(&bytes, PixelFormat::Gray8).expect("decode must succeed");
-    assert_eq!(animation.pixel_format, PixelFormat::Gray8);
+        nopng::decode_animation(&bytes, nopng::PixelFormat::Gray8).expect("decode must succeed");
+    assert_eq!(animation.pixel_format, nopng::PixelFormat::Gray8);
     assert_eq!(animation.frames[0].pixels.len(), 4);
     // Pure red -> the crate's luma weights give 76.
     assert_eq!(animation.frames[0].pixels, vec![76, 76, 76, 76]);
@@ -564,13 +571,16 @@ fn indexed_output_is_unsupported() {
     let bytes = build_apng(2, &[first], 0, false, None);
     let error = nopng::decode_animation(
         &bytes,
-        PixelFormat::Indexed8 {
+        nopng::PixelFormat::Indexed8 {
             palette: vec![0, 0, 0],
             trns: None,
         },
     )
     .expect_err("indexed output must be rejected");
-    assert!(matches!(error, Error::Unsupported(_)), "got {error:?}");
+    assert!(
+        matches!(error, nopng::Error::Unsupported(_)),
+        "got {error:?}"
+    );
 }
 
 #[test]
@@ -627,13 +637,16 @@ fn decodes_interlaced_frames() {
 #[test]
 fn static_png_is_not_an_animation() {
     let png = nopng::encode_image(
-        &nopng::ImageSpec::new(2, 2, PixelFormat::Rgba8),
+        &nopng::ImageSpec::new(2, 2, nopng::PixelFormat::Rgba8),
         &solid(2, RED),
     )
     .expect("infallible");
-    let error =
-        nopng::decode_animation(&png, PixelFormat::Rgba8).expect_err("a static PNG has no acTL");
-    assert!(matches!(error, Error::InvalidData(_)), "got {error:?}");
+    let error = nopng::decode_animation(&png, nopng::PixelFormat::Rgba8)
+        .expect_err("a static PNG has no acTL");
+    assert!(
+        matches!(error, nopng::Error::InvalidData(_)),
+        "got {error:?}"
+    );
 }
 
 #[test]
@@ -641,9 +654,12 @@ fn frame_larger_than_canvas_is_rejected() {
     // A 2x2 frame declared on a 1x1 canvas: the rectangle does not fit.
     let oversized = FrameSpec::full(2, solid(2, RED), Dispose::None, Blend::Source);
     let bytes = build_apng(1, &[oversized], 0, false, None);
-    let error = nopng::decode_animation(&bytes, PixelFormat::Rgba8)
+    let error = nopng::decode_animation(&bytes, nopng::PixelFormat::Rgba8)
         .expect_err("a frame wider than the canvas must be rejected");
-    assert!(matches!(error, Error::InvalidData(_)), "got {error:?}");
+    assert!(
+        matches!(error, nopng::Error::InvalidData(_)),
+        "got {error:?}"
+    );
 }
 
 #[test]
@@ -663,16 +679,19 @@ fn sub_rectangle_that_overflows_the_edge_is_rejected() {
         pixels: GREEN.to_vec(),
     };
     let bytes = build_apng(2, &[first, overflowing], 0, false, None);
-    let error = nopng::decode_animation(&bytes, PixelFormat::Rgba8)
+    let error = nopng::decode_animation(&bytes, nopng::PixelFormat::Rgba8)
         .expect_err("a frame past the right edge must be rejected");
-    assert!(matches!(error, Error::InvalidData(_)), "got {error:?}");
+    assert!(
+        matches!(error, nopng::Error::InvalidData(_)),
+        "got {error:?}"
+    );
 }
 
 #[test]
 fn first_frame_must_cover_the_canvas() {
     let first = FrameSpec::full(2, solid(2, RED), Dispose::None, Blend::Source);
     let bytes = build_apng(2, &[first], 0, false, None);
-    assert!(nopng::decode_animation(&bytes, PixelFormat::Rgba8).is_ok());
+    assert!(nopng::decode_animation(&bytes, nopng::PixelFormat::Rgba8).is_ok());
 
     // A 1x1 first frame on a 2x2 canvas is illegal.
     let sub = FrameSpec {
@@ -687,7 +706,10 @@ fn first_frame_must_cover_the_canvas() {
         pixels: RED.to_vec(),
     };
     let bytes = build_apng(2, &[sub], 0, false, None);
-    let error = nopng::decode_animation(&bytes, PixelFormat::Rgba8)
+    let error = nopng::decode_animation(&bytes, nopng::PixelFormat::Rgba8)
         .expect_err("a sub-rectangle first frame must be rejected");
-    assert!(matches!(error, Error::InvalidData(_)), "got {error:?}");
+    assert!(
+        matches!(error, nopng::Error::InvalidData(_)),
+        "got {error:?}"
+    );
 }
