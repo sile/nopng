@@ -30,7 +30,7 @@ use crate::png_types::{Error, PixelFormat, Result};
 pub struct Delay {
     /// Numerator of the delay in seconds.
     pub num: u16,
-    /// Denominator of the delay in seconds. Always non-zero.
+    /// Denominator of the delay in seconds.
     pub den: NonZeroU16,
 }
 
