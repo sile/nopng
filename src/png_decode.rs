@@ -126,21 +126,21 @@ impl PngHeader {
     }
 }
 
-#[derive(Debug, Clone)]
-enum Transparency {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Transparency {
     Grayscale(u16),
     Truecolor([u16; 3]),
     Palette(Vec<u8>),
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct AncillaryChunks {
-    palette: Option<Vec<[u8; 3]>>,
-    transparency: Option<Transparency>,
+    pub(crate) palette: Option<Vec<[u8; 3]>>,
+    pub(crate) transparency: Option<Transparency>,
 }
 
 impl AncillaryChunks {
-    fn set_palette(&mut self, palette: Vec<[u8; 3]>) -> Result<()> {
+    pub(crate) fn set_palette(&mut self, palette: Vec<[u8; 3]>) -> Result<()> {
         if self.palette.is_some() {
             return Err(Error::InvalidData("duplicate PLTE chunk".into()));
         }
@@ -148,7 +148,7 @@ impl AncillaryChunks {
         Ok(())
     }
 
-    fn set_transparency(&mut self, transparency: Transparency) -> Result<()> {
+    pub(crate) fn set_transparency(&mut self, transparency: Transparency) -> Result<()> {
         if self.transparency.is_some() {
             return Err(Error::InvalidData("duplicate tRNS chunk".into()));
         }
@@ -156,7 +156,7 @@ impl AncillaryChunks {
         Ok(())
     }
 
-    fn validate(&self, header: &PngHeader) -> Result<()> {
+    pub(crate) fn validate(&self, header: &PngHeader) -> Result<()> {
         if header.color_type == CT_INDEXED && self.palette.is_none() {
             return Err(Error::InvalidData("missing PLTE for palette image".into()));
         }
@@ -371,12 +371,7 @@ fn parse_png(bytes: &[u8]) -> Result<(PngHeader, AncillaryChunks, Vec<u8>)> {
                 if seen_idat {
                     return Err(Error::InvalidData("PLTE appears after IDAT".into()));
                 }
-                if matches!(header.color_type, CT_GRAY | CT_GRAY_ALPHA) {
-                    return Err(Error::InvalidData(
-                        "PLTE chunk is not allowed for grayscale images".into(),
-                    ));
-                }
-                ancillary.set_palette(parse_palette(chunk_data)?)?;
+                apply_ancillary_chunk(&chunk_type, chunk_data, &header, &mut ancillary)?;
             }
             b"tRNS" => {
                 let Some(header) = header else {
@@ -385,7 +380,7 @@ fn parse_png(bytes: &[u8]) -> Result<(PngHeader, AncillaryChunks, Vec<u8>)> {
                 if seen_idat {
                     return Err(Error::InvalidData("tRNS appears after IDAT".into()));
                 }
-                ancillary.set_transparency(parse_transparency(chunk_data, &header, &ancillary)?)?;
+                apply_ancillary_chunk(&chunk_type, chunk_data, &header, &mut ancillary)?;
             }
             b"IDAT" => {
                 if header.is_none() {
@@ -481,7 +476,36 @@ fn parse_transparency(
     }
 }
 
-fn decompress_zlib(data: &[u8], max_output: usize) -> Result<Vec<u8>> {
+/// Applies a `PLTE` or `tRNS` chunk to `ancillary`, with the same validation
+/// the static decoder uses.
+///
+/// Shared by [`parse_png`] and the APNG chunk walker so that both paths agree
+/// on palette/transparency rules. Callers must run
+/// [`AncillaryChunks::validate`] once the header is known.
+pub(crate) fn apply_ancillary_chunk(
+    chunk_type: &[u8; 4],
+    chunk_data: &[u8],
+    header: &PngHeader,
+    ancillary: &mut AncillaryChunks,
+) -> Result<()> {
+    match chunk_type {
+        b"PLTE" => {
+            if matches!(header.color_type, CT_GRAY | CT_GRAY_ALPHA) {
+                return Err(Error::InvalidData(
+                    "PLTE chunk is not allowed for grayscale images".into(),
+                ));
+            }
+            ancillary.set_palette(parse_palette(chunk_data)?)
+        }
+        b"tRNS" => {
+            let transparency = parse_transparency(chunk_data, header, ancillary)?;
+            ancillary.set_transparency(transparency)
+        }
+        _ => Ok(()),
+    }
+}
+
+pub(crate) fn decompress_zlib(data: &[u8], max_output: usize) -> Result<Vec<u8>> {
     if data.len() < 6 {
         return Err(Error::InvalidData("zlib stream is too short".into()));
     }
@@ -523,7 +547,24 @@ fn decompress_zlib(data: &[u8], max_output: usize) -> Result<Vec<u8>> {
     Ok(decoded)
 }
 
-fn decode_to_format_and_data(
+/// Decodes one frame's filtered scanline data into its native pixel format.
+///
+/// `header` describes the frame itself: for a static PNG that is the image, and
+/// for an APNG frame it is the canvas header with `interlace_method` preserved
+/// but `width`/`height` narrowed to the frame's rectangle. Callers are
+/// responsible for that narrowing (see `crate::apng_decode`).
+///
+/// This is the shared entry point for static decoding and APNG frames, so both
+/// paths agree on unfiltering, bit unpacking, and tRNS handling.
+pub(crate) fn decode_frame_pixels(
+    header: &PngHeader,
+    filtered: &[u8],
+    ancillary: &AncillaryChunks,
+) -> Result<(PixelFormat, Vec<u8>)> {
+    decode_to_format_and_data(header, filtered, ancillary)
+}
+
+pub(crate) fn decode_to_format_and_data(
     header: &PngHeader,
     filtered: &[u8],
     ancillary: &AncillaryChunks,

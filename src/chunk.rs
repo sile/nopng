@@ -113,8 +113,9 @@ pub(crate) struct AcTlChunk {
     pub(crate) num_plays: u32,
 }
 
-#[allow(dead_code)]
 impl AcTlChunk {
+    // Used only by tests until `encode_animation` lands; remove then.
+    #[allow(dead_code)]
     pub(crate) fn append_to(&self, out: &mut Vec<u8>) {
         let mut data = [0u8; 8];
         data[0..4].copy_from_slice(&self.num_frames.to_be_bytes());
@@ -147,7 +148,6 @@ pub(crate) struct FcTlChunk {
     pub(crate) blend_op: u8,
 }
 
-#[allow(dead_code)]
 impl FcTlChunk {
     pub(crate) const DISPOSE_OP_NONE: u8 = 0;
     pub(crate) const DISPOSE_OP_BACKGROUND: u8 = 1;
@@ -155,6 +155,8 @@ impl FcTlChunk {
     pub(crate) const BLEND_OP_SOURCE: u8 = 0;
     pub(crate) const BLEND_OP_OVER: u8 = 1;
 
+    // Used only by tests until `encode_animation` lands; remove then.
+    #[allow(dead_code)]
     pub(crate) fn append_to(&self, out: &mut Vec<u8>) {
         let mut data = [0u8; 26];
         data[0..4].copy_from_slice(&self.sequence_number.to_be_bytes());
@@ -196,8 +198,9 @@ pub(crate) struct FdAtChunk<'a> {
     pub(crate) data: &'a [u8],
 }
 
-#[allow(dead_code)]
 impl<'a> FdAtChunk<'a> {
+    // Used only by tests until `encode_animation` lands; remove then.
+    #[allow(dead_code)]
     pub(crate) fn append_to(&self, out: &mut Vec<u8>) {
         let mut data = Vec::with_capacity(4 + self.data.len());
         data.extend_from_slice(&self.sequence_number.to_be_bytes());
