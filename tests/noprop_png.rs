@@ -2,16 +2,15 @@
 //!
 //! These are the imperative counterparts of the former `proptest`-based
 //! tests: every property is a plain Rust closure that samples its inputs
-//! and asserts on the result. The `png` crate is kept as an independent
-//! reference decoder ("oracle") for the differential properties that
-//! compare an encoded image against an external implementation.
+//! and asserts on the result. Expected values are derived independently of
+//! the encoder and decoder (from the sampled inputs), so the properties do
+//! not need an external reference implementation.
 //!
 //! Reproduce a failure by copying the seed printed in the failure report
 //! into the `NOPNG_PROP_TEST_SEED` environment variable and rerunning the
 //! same test with the same case budget.
 
 use std::cell::Cell;
-use std::io::Cursor;
 
 use nopng::{ImageSpec, PixelFormat, decode_image, encode_image, reformat_pixels};
 use noprop::{TestCaseContext, TestResult};
@@ -20,46 +19,6 @@ use noprop::{TestCaseContext, TestResult};
 const CASES: usize = 100;
 /// Smaller budget for the byte-fuzzing property, whose cases are heavier.
 const FUZZ_CASES: usize = 200;
-
-// ---------------------------------------------------------------------
-// Reference decoder (the `png` crate) used as an oracle.
-// ---------------------------------------------------------------------
-
-fn decode_with_png_crate(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), png::DecodingError> {
-    let mut decoder = png::Decoder::new(Cursor::new(bytes));
-    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
-    let mut reader = decoder.read_info()?;
-    let mut buf = vec![0; reader.output_buffer_size()];
-    let info = reader.next_frame(&mut buf)?;
-    Ok((
-        info.width,
-        info.height,
-        normalize_to_rgba8(info.color_type, &buf[..info.buffer_size()]),
-    ))
-}
-
-fn normalize_to_rgba8(color_type: png::ColorType, data: &[u8]) -> Vec<u8> {
-    match color_type {
-        png::ColorType::Grayscale => data
-            .iter()
-            .flat_map(|&gray| [gray, gray, gray, 255])
-            .collect(),
-        png::ColorType::Rgb => data
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .flat_map(|chunk| [chunk[0], chunk[1], chunk[2], 255])
-            .collect(),
-        png::ColorType::GrayscaleAlpha => data
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .flat_map(|chunk| [chunk[0], chunk[0], chunk[0], chunk[1]])
-            .collect(),
-        png::ColorType::Rgba => data.to_vec(),
-        png::ColorType::Indexed => unreachable!("indexed data should be expanded by png crate"),
-    }
-}
 
 // ---------------------------------------------------------------------
 // Samplers (ordinary functions, not a combinator DSL).
@@ -185,7 +144,7 @@ fn roundtrip_random_rgba16() -> TestResult {
 }
 
 #[test]
-fn encoded_png_matches_png_crate_for_grayscale() -> TestResult {
+fn encoded_png_has_expected_grayscale() -> TestResult {
     let seed = noprop::seed_from_env_or_time("NOPNG_PROP_TEST_SEED")?;
     let interlaced_cases = Cell::new(0usize);
     let non_interlaced_cases = Cell::new(0usize);
@@ -203,11 +162,21 @@ fn encoded_png_matches_png_crate_for_grayscale() -> TestResult {
         };
         let encoded = encode_image(&spec, &samples).expect("infallible");
 
-        let (decoded_width, decoded_height, decoded_rgba) =
-            decode_with_png_crate(&encoded).expect("infallible");
-        assert_eq!(decoded_width, width);
-        assert_eq!(decoded_height, height);
-        // Build expected RGBA8 from 2-bit samples (0->0, 1->85, 2->170, 3->255).
+        // Decode with nopng and compare against an expectation built
+        // directly from the sampled 2-bit samples
+        // (0->0, 1->85, 2->170, 3->255).
+        let (decoded_spec, decoded_samples) = decode_image(&encoded).expect("infallible");
+        assert_eq!(decoded_spec.width, width);
+        assert_eq!(decoded_spec.height, height);
+        assert_eq!(decoded_spec.interlaced, interlaced);
+        assert_eq!(decoded_samples, samples);
+
+        let decoded_rgba = reformat_pixels(
+            &decoded_spec.pixel_format,
+            &decoded_samples,
+            &PixelFormat::Rgba8,
+        )
+        .expect("infallible");
         let expected_rgba: Vec<u8> = samples
             .iter()
             .flat_map(|&g| {
@@ -237,7 +206,7 @@ fn encoded_png_matches_png_crate_for_grayscale() -> TestResult {
 }
 
 #[test]
-fn encoded_png_matches_png_crate_for_indexed() -> TestResult {
+fn encoded_png_has_expected_indexed() -> TestResult {
     let seed = noprop::seed_from_env_or_time("NOPNG_PROP_TEST_SEED")?;
     let palette = fixed_palette();
     let trns = fixed_trns();
@@ -259,11 +228,19 @@ fn encoded_png_matches_png_crate_for_indexed() -> TestResult {
         };
         let encoded = encode_image(&spec, &indices).expect("infallible");
 
-        let (decoded_width, decoded_height, decoded_rgba) =
-            decode_with_png_crate(&encoded).expect("infallible");
-        assert_eq!(decoded_width, width);
-        assert_eq!(decoded_height, height);
-        // Build expected RGBA8 from palette + trns.
+        // Decode with nopng and compare against an expectation built
+        // directly from the sampled indices plus the palette and tRNS.
+        let (decoded_spec, decoded_indices) = decode_image(&encoded).expect("infallible");
+        assert_eq!(decoded_spec.width, width);
+        assert_eq!(decoded_spec.height, height);
+        assert_eq!(decoded_indices, indices);
+
+        let decoded_rgba = reformat_pixels(
+            &decoded_spec.pixel_format,
+            &decoded_indices,
+            &PixelFormat::Rgba8,
+        )
+        .expect("infallible");
         let expected_rgba: Vec<u8> = indices
             .iter()
             .flat_map(|&idx| {
@@ -342,7 +319,7 @@ fn reformat_identity_returns_same_data() -> TestResult {
 }
 
 #[test]
-fn reformat_to_rgba8_matches_png_crate_for_grayscale() -> TestResult {
+fn reformat_to_rgba8_produces_expected_grayscale() -> TestResult {
     let seed = noprop::seed_from_env_or_time("NOPNG_PROP_TEST_SEED")?;
     let mut runner = noprop::Runner::new(seed);
 
@@ -366,9 +343,16 @@ fn reformat_to_rgba8_matches_png_crate_for_grayscale() -> TestResult {
         )
         .expect("infallible");
 
-        // Compare with the png crate.
-        let (_, _, ref_rgba) = decode_with_png_crate(&encoded).expect("infallible");
-        assert_eq!(nopng_rgba, ref_rgba);
+        // Compare against an expectation built directly from the sampled
+        // 2-bit samples (0->0, 1->85, 2->170, 3->255).
+        let expected_rgba: Vec<u8> = samples
+            .iter()
+            .flat_map(|&g| {
+                let scaled = ((u32::from(g) * 255) / ((1u32 << 2) - 1)) as u8;
+                [scaled, scaled, scaled, 255]
+            })
+            .collect();
+        assert_eq!(nopng_rgba, expected_rgba);
         Ok(())
     })?;
 
@@ -376,7 +360,7 @@ fn reformat_to_rgba8_matches_png_crate_for_grayscale() -> TestResult {
 }
 
 #[test]
-fn reformat_to_rgba8_matches_png_crate_for_indexed() -> TestResult {
+fn reformat_to_rgba8_produces_expected_indexed() -> TestResult {
     let seed = noprop::seed_from_env_or_time("NOPNG_PROP_TEST_SEED")?;
     let palette = fixed_palette();
     let trns = fixed_trns();
@@ -404,8 +388,20 @@ fn reformat_to_rgba8_matches_png_crate_for_indexed() -> TestResult {
         )
         .expect("infallible");
 
-        let (_, _, ref_rgba) = decode_with_png_crate(&encoded).expect("infallible");
-        assert_eq!(nopng_rgba, ref_rgba);
+        // Compare against an expectation built directly from the sampled
+        // indices plus the palette and tRNS.
+        let expected_rgba: Vec<u8> = indices
+            .iter()
+            .flat_map(|&idx| {
+                let rgb_off = usize::from(idx) * 3;
+                let r = palette[rgb_off];
+                let g = palette[rgb_off + 1];
+                let b = palette[rgb_off + 2];
+                let a = trns.get(usize::from(idx)).copied().unwrap_or(255);
+                [r, g, b, a]
+            })
+            .collect();
+        assert_eq!(nopng_rgba, expected_rgba);
         Ok(())
     })?;
 
