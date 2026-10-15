@@ -342,6 +342,7 @@ pub(crate) struct Adam7Pass {
 #[cfg(test)]
 mod tests {
     use alloc::{vec, vec::Vec};
+    use core::assert_matches;
 
     use super::{
         Error, IhdrChunk, ImageSpec, PNG_SIGNATURE, PixelFormat, decode_image, encode_image,
@@ -430,7 +431,7 @@ mod tests {
             pixel_format: PixelFormat::Rgba8,
             interlaced: false,
         };
-        let error = encode_image(&spec, &data).unwrap_err();
+        let error = encode_image(&spec, &data).expect_err("mismatched buffer must fail");
         assert!(
             matches!(error, Error::InvalidData(message) if message.contains("pixel buffer length"))
         );
@@ -448,8 +449,8 @@ mod tests {
             },
             interlaced: false,
         };
-        let error = encode_image(&spec, &data).unwrap_err();
-        assert!(matches!(error, Error::InvalidData(message) if message.contains("out-of-range")));
+        let error = encode_image(&spec, &data).expect_err("out-of-range index must fail");
+        assert_matches!(error, Error::InvalidData(message) if message.contains("out-of-range"));
     }
 
     #[test]
@@ -474,7 +475,7 @@ mod tests {
     #[test]
     fn image_spec_rejects_truncated_ihdr() {
         let error = inspect_image(&PNG_SIGNATURE).expect_err("infallible");
-        assert!(matches!(error, Error::InvalidData(message) if message.contains("IHDR")));
+        assert_matches!(error, Error::InvalidData(message) if message.contains("IHDR"));
     }
 
     #[test]
@@ -486,8 +487,8 @@ mod tests {
             pixel_format: PixelFormat::Rgba8,
             interlaced: false,
         };
-        let error = encode_image(&spec, &data).unwrap_err();
-        assert!(matches!(error, Error::InvalidData(message) if message.contains("non-zero")));
+        let error = encode_image(&spec, &data).expect_err("zero width must fail");
+        assert_matches!(error, Error::InvalidData(message) if message.contains("non-zero"));
     }
 
     #[test]
@@ -499,8 +500,8 @@ mod tests {
             pixel_format: PixelFormat::Rgba8,
             interlaced: false,
         };
-        let error = encode_image(&spec, &data).unwrap_err();
-        assert!(matches!(error, Error::InvalidData(message) if message.contains("non-zero")));
+        let error = encode_image(&spec, &data).expect_err("zero height must fail");
+        assert_matches!(error, Error::InvalidData(message) if message.contains("non-zero"));
     }
 
     #[test]
