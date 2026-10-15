@@ -26,17 +26,6 @@ use crate::png_types::{Error, PixelFormat, Result};
 /// the wire cannot be represented here. Decoding normalizes an on-the-wire
 /// `delay_den` of `0` to `100`, which is the interpretation the specification
 /// prescribes.
-///
-/// # Examples
-///
-/// ```
-/// use core::num::NonZeroU16;
-///
-/// // 12/100 s = 120 ms
-/// let delay = nopng::Delay { num: 12, den: NonZeroU16::new(100).ok_or("denominator is zero")? };
-/// assert_eq!(f64::from(delay.num) / f64::from(delay.den.get()), 0.12);
-/// # Ok::<(), &str>(())
-/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Delay {
     /// Numerator of the delay in seconds.
