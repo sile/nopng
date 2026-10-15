@@ -99,6 +99,12 @@ pub(crate) fn zlib_wrap(filtered_data: &[u8]) -> crate::png_types::Result<Vec<u8
     Ok(data)
 }
 
+// NOTE: the APNG chunk types below are parsed by `apng::parse_animation` but
+// not yet consumed by any encoder, so their serialization/parse helpers are
+// unreachable from the public API until the animation decode/encode changes
+// land. Remove these `allow`s then. (`expect` cannot be used: these helpers are
+// exercised by the unit tests, which would make the expectation unfulfilled.)
+
 /// The `acTL` chunk of an APNG: animation control data that must appear before
 /// the first `IDAT` chunk.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,6 +113,7 @@ pub(crate) struct AcTlChunk {
     pub(crate) num_plays: u32,
 }
 
+#[allow(dead_code)]
 impl AcTlChunk {
     pub(crate) fn append_to(&self, out: &mut Vec<u8>) {
         let mut data = [0u8; 8];
@@ -140,6 +147,7 @@ pub(crate) struct FcTlChunk {
     pub(crate) blend_op: u8,
 }
 
+#[allow(dead_code)]
 impl FcTlChunk {
     pub(crate) const DISPOSE_OP_NONE: u8 = 0;
     pub(crate) const DISPOSE_OP_BACKGROUND: u8 = 1;
@@ -188,6 +196,7 @@ pub(crate) struct FdAtChunk<'a> {
     pub(crate) data: &'a [u8],
 }
 
+#[allow(dead_code)]
 impl<'a> FdAtChunk<'a> {
     pub(crate) fn append_to(&self, out: &mut Vec<u8>) {
         let mut data = Vec::with_capacity(4 + self.data.len());

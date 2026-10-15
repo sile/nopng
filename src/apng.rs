@@ -1,5 +1,11 @@
 //! APNG (Animated PNG) chunk-level parsing and validation.
 //!
+// NOTE: the walker below is not yet reachable from the public API; it is
+// consumed by `decode_animation` in the follow-up decode change. Remove this
+// `allow` then. (`expect` cannot be used: in the test build these items *are*
+// exercised, which would make the expectation unfulfilled.)
+#![allow(dead_code)]
+//!
 //! This module owns the wire format of the APNG chunks (`acTL`, `fcTL`, `fdAT`)
 //! and the walker that turns a PNG byte stream into the raw per-frame data the
 //! decoder composites. Nothing here is public: the frozen public API only
