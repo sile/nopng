@@ -1,3 +1,5 @@
+use std::assert_matches;
+
 fn rgba8(bytes: &[u8]) -> Vec<u8> {
     let (spec, data) = nopng::decode_image(bytes).expect("infallible");
     assert_eq!(data.len(), spec.data_len());
@@ -26,10 +28,10 @@ fn reads_image_spec_from_ihdr() {
         nopng::inspect_image(include_bytes!("data/gray16_interlaced.png")).expect("infallible");
     assert_eq!(spec.width, 5);
     assert_eq!(spec.height, 4);
-    assert!(matches!(
+    assert_matches!(
         spec.pixel_format,
         nopng::PixelFormat::Gray16Be | nopng::PixelFormat::GrayAlpha16Be
-    ));
+    );
     assert!(spec.interlaced);
 }
 
@@ -80,7 +82,7 @@ fn decodes_1bit_grayscale_png() {
         nopng::decode_image(include_bytes!("data/gray_1bit_filters.png")).expect("infallible");
     assert_eq!(spec.width, 5);
     assert_eq!(spec.height, 2);
-    assert!(matches!(spec.pixel_format, nopng::PixelFormat::Gray1));
+    assert_matches!(spec.pixel_format, nopng::PixelFormat::Gray1);
     assert_eq!(
         rgba8(include_bytes!("data/gray_1bit_filters.png")),
         &[
@@ -143,13 +145,13 @@ fn decodes_palette_interlaced() {
         nopng::decode_image(include_bytes!("data/palette_interlaced.png")).expect("infallible");
     assert!(spec.width > 0);
     assert!(spec.height > 0);
-    assert!(matches!(
+    assert_matches!(
         spec.pixel_format,
         nopng::PixelFormat::Indexed1 { .. }
             | nopng::PixelFormat::Indexed2 { .. }
             | nopng::PixelFormat::Indexed4 { .. }
             | nopng::PixelFormat::Indexed8 { .. }
-    ));
+    );
     // Verify we can roundtrip through RGBA.
     let rgba = rgba8(include_bytes!("data/palette_interlaced.png"));
     assert!(!rgba.is_empty());
@@ -161,10 +163,10 @@ fn decodes_gray16_interlaced() {
         nopng::decode_image(include_bytes!("data/gray16_interlaced.png")).expect("infallible");
     assert_eq!(spec.width, 5);
     assert_eq!(spec.height, 4);
-    assert!(matches!(
+    assert_matches!(
         spec.pixel_format,
         nopng::PixelFormat::Gray16Be | nopng::PixelFormat::GrayAlpha16Be
-    ));
+    );
     let rgba = rgba8(include_bytes!("data/gray16_interlaced.png"));
     assert_eq!(rgba.len(), 5 * 4 * 4);
 }
