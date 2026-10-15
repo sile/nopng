@@ -1,4 +1,5 @@
 #![no_std]
+#![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 //! `nopng` — a minimal, `no_std` PNG encoder/decoder.

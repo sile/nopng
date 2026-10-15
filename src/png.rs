@@ -430,7 +430,7 @@ mod tests {
             pixel_format: PixelFormat::Rgba8,
             interlaced: false,
         };
-        let error = encode_image(&spec, &data).unwrap_err();
+        let error = encode_image(&spec, &data).expect_err("mismatched buffer must fail");
         assert!(
             matches!(error, Error::InvalidData(message) if message.contains("pixel buffer length"))
         );
@@ -448,7 +448,7 @@ mod tests {
             },
             interlaced: false,
         };
-        let error = encode_image(&spec, &data).unwrap_err();
+        let error = encode_image(&spec, &data).expect_err("out-of-range index must fail");
         assert!(matches!(error, Error::InvalidData(message) if message.contains("out-of-range")));
     }
 
@@ -486,7 +486,7 @@ mod tests {
             pixel_format: PixelFormat::Rgba8,
             interlaced: false,
         };
-        let error = encode_image(&spec, &data).unwrap_err();
+        let error = encode_image(&spec, &data).expect_err("zero width must fail");
         assert!(matches!(error, Error::InvalidData(message) if message.contains("non-zero")));
     }
 
@@ -499,7 +499,7 @@ mod tests {
             pixel_format: PixelFormat::Rgba8,
             interlaced: false,
         };
-        let error = encode_image(&spec, &data).unwrap_err();
+        let error = encode_image(&spec, &data).expect_err("zero height must fail");
         assert!(matches!(error, Error::InvalidData(message) if message.contains("non-zero")));
     }
 
