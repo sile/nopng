@@ -250,7 +250,7 @@ pub(crate) fn decode_png(
     let (header, ancillary, idat_data) = parse_png(bytes)?;
     let expected_filtered = expected_filtered_len(&header)?;
     expected_raw_len(&header)?;
-    let filtered = decompress_zlib(&idat_data)?;
+    let filtered = decompress_zlib(&idat_data, expected_filtered)?;
     if filtered.len() != expected_filtered {
         return Err(Error::InvalidData(
             format!(
@@ -481,7 +481,7 @@ fn parse_transparency(
     }
 }
 
-fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>> {
+fn decompress_zlib(data: &[u8], max_output: usize) -> Result<Vec<u8>> {
     if data.len() < 6 {
         return Err(Error::InvalidData("zlib stream is too short".into()));
     }
@@ -509,7 +509,7 @@ fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>> {
     }
 
     let deflate_bytes = &data[2..data.len() - 4];
-    let decoded = deflate::decompress(deflate_bytes)
+    let decoded = deflate::decompress(deflate_bytes, max_output)
         .map_err(|error| Error::InvalidData(format!("invalid deflate stream: {error}").into()))?;
     let expected_adler = u32::from_be_bytes(
         data[data.len() - 4..]
