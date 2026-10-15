@@ -663,8 +663,12 @@ fn convert_grayscale_low_bit(
     };
     let row_stride = packed_stride_for_width(header, width)?;
     let mut unpacked = Vec::with_capacity(width as usize * (raw.len() / row_stride.max(1)));
-    for row in raw.chunks_exact(row_stride) {
-        unpacked.extend(unpack_samples(row, width as usize, header.bit_depth));
+    // An empty Adam7 pass has `width == 0` (hence `row_stride == 0`) and no
+    // raw data; `chunks_exact(0)` would panic, so skip the loop entirely.
+    if row_stride != 0 {
+        for row in raw.chunks_exact(row_stride) {
+            unpacked.extend(unpack_samples(row, width as usize, header.bit_depth));
+        }
     }
     if let Some(transparent) = transparent {
         let mut data = Vec::with_capacity(unpacked.len() * 2);
@@ -699,8 +703,12 @@ fn convert_indexed(
     };
     let row_stride = packed_stride_for_width(header, width)?;
     let mut unpacked = Vec::with_capacity(width as usize * (raw.len() / row_stride.max(1)));
-    for row in raw.chunks_exact(row_stride) {
-        unpacked.extend(unpack_samples(row, width as usize, header.bit_depth));
+    // An empty Adam7 pass has `width == 0` (hence `row_stride == 0`) and no
+    // raw data; `chunks_exact(0)` would panic, so skip the loop entirely.
+    if row_stride != 0 {
+        for row in raw.chunks_exact(row_stride) {
+            unpacked.extend(unpack_samples(row, width as usize, header.bit_depth));
+        }
     }
     let flat_palette = flatten_palette(palette);
     let format = indexed_format_from_bit_depth(header.bit_depth, flat_palette, trns);
