@@ -168,6 +168,49 @@ fn decodes_gray16_interlaced() {
 }
 
 #[test]
+fn decodes_interlaced_low_bit_images_with_empty_passes() {
+    // Regression test: Adam7 passes can be empty for small images
+    // (e.g. 2x2 has passes with width 0 and/or height 0). The packed
+    // low-bit grayscale and indexed decoders used to call
+    // `chunks_exact(0)` for those passes and panic with "chunk size must
+    // be non-zero"; they must instead decode cleanly.
+    for (width, height) in [(1, 1), (1, 8), (8, 1), (2, 2), (3, 3)] {
+        let gray = ImageSpec {
+            width,
+            height,
+            pixel_format: PixelFormat::Gray2,
+            interlaced: true,
+        };
+        let samples: Vec<u8> = (0..width * height).map(|i| (i % 4) as u8).collect();
+        let encoded = encode_image(&gray, &samples).expect("infallible");
+        let (decoded_spec, decoded) = decode_image(&encoded).expect("infallible");
+        assert!(decoded_spec.interlaced);
+        assert_eq!(
+            decoded, samples,
+            "gray2 interlace mismatch for {width}x{height}"
+        );
+
+        let indexed = ImageSpec {
+            width,
+            height,
+            pixel_format: PixelFormat::Indexed4 {
+                palette: vec![255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0],
+                trns: None,
+            },
+            interlaced: true,
+        };
+        let indices: Vec<u8> = (0..width * height).map(|i| (i % 4) as u8).collect();
+        let encoded = encode_image(&indexed, &indices).expect("infallible");
+        let (decoded_spec, decoded) = decode_image(&encoded).expect("infallible");
+        assert!(decoded_spec.interlaced);
+        assert_eq!(
+            decoded, indices,
+            "indexed4 interlace mismatch for {width}x{height}"
+        );
+    }
+}
+
+#[test]
 fn rejects_crc_mismatch() {
     let mut bytes = include_bytes!("data/gray_filters.png").to_vec();
     let index = bytes.len() - 1;
