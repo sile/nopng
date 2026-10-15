@@ -86,7 +86,12 @@ pub fn compress(data: &[u8]) -> Result<Vec<u8>> {
     encode_dynamic_literals(data)
 }
 
-pub fn decompress(input: &[u8]) -> Result<Vec<u8>> {
+/// Decompresses a raw DEFLATE stream, rejecting output longer than `max_output`.
+///
+/// The cap is enforced as the output grows rather than after the fact, so a
+/// stream that expands far beyond its declared size is refused before it can
+/// allocate that much memory.
+pub fn decompress(input: &[u8], max_output: usize) -> Result<Vec<u8>> {
     let mut reader = BitReader::new(input);
     let mut output = Vec::new();
     let fixed_lit = fixed_literal_decoder()?;
@@ -95,13 +100,19 @@ pub fn decompress(input: &[u8]) -> Result<Vec<u8>> {
         let is_final = reader.read_bit()?;
         let block_type = reader.read_bits(2)?;
         match block_type {
-            0b00 => decode_raw_block(&mut reader, &mut output)?,
+            0b00 => decode_raw_block(&mut reader, &mut output, max_output)?,
             0b01 => {
-                decode_compressed_block(&mut reader, &fixed_lit, &fixed_dist, &mut output)?;
+                decode_compressed_block(
+                    &mut reader,
+                    &fixed_lit,
+                    &fixed_dist,
+                    &mut output,
+                    max_output,
+                )?;
             }
             0b10 => {
                 let (literal, distance) = read_dynamic_decoders(&mut reader)?;
-                decode_compressed_block(&mut reader, &literal, &distance, &mut output)?;
+                decode_compressed_block(&mut reader, &literal, &distance, &mut output, max_output)?;
             }
             0b11 => {
                 return Err(Error::InvalidData("reserved DEFLATE block type".into()));
@@ -115,7 +126,25 @@ pub fn decompress(input: &[u8]) -> Result<Vec<u8>> {
     Ok(output)
 }
 
-fn decode_raw_block(reader: &mut BitReader<'_>, output: &mut Vec<u8>) -> Result<()> {
+/// Returns an error if appending `additional` bytes would exceed `max_output`.
+fn check_output_limit(output_len: usize, additional: usize, max_output: usize) -> Result<()> {
+    if additional > max_output.saturating_sub(output_len) {
+        return Err(Error::InvalidData(
+            format!(
+                "deflate stream expands past the {} byte limit for this image",
+                max_output
+            )
+            .into(),
+        ));
+    }
+    Ok(())
+}
+
+fn decode_raw_block(
+    reader: &mut BitReader<'_>,
+    output: &mut Vec<u8>,
+    max_output: usize,
+) -> Result<()> {
     reader.align_to_byte();
     let len = reader.read_u16_le()?;
     let nlen = reader.read_u16_le()?;
@@ -124,6 +153,7 @@ fn decode_raw_block(reader: &mut BitReader<'_>, output: &mut Vec<u8>) -> Result<
             format!("LEN={} is not the one's complement of NLEN={}", len, nlen).into(),
         ));
     }
+    check_output_limit(output.len(), len as usize, max_output)?;
     let bytes = reader.read_bytes(len as usize)?;
     output.extend_from_slice(bytes);
     Ok(())
@@ -134,11 +164,15 @@ fn decode_compressed_block(
     literal_decoder: &HuffmanDecoder,
     distance_decoder: &HuffmanDecoder,
     output: &mut Vec<u8>,
+    max_output: usize,
 ) -> Result<()> {
     loop {
         let symbol = literal_decoder.decode(reader)?;
         match symbol {
-            0..=255 => output.push(symbol as u8),
+            0..=255 => {
+                check_output_limit(output.len(), 1, max_output)?;
+                output.push(symbol as u8);
+            }
             END_OF_BLOCK => return Ok(()),
             257..=285 => {
                 let (base_length, extra_bits) = LENGTH_TABLE[(symbol - 257) as usize];
@@ -163,6 +197,7 @@ fn decode_compressed_block(
                     reader.read_bits(distance_extra_bits)?
                 };
                 let distance = (base_distance + distance_extra) as usize;
+                check_output_limit(output.len(), length as usize, max_output)?;
                 copy_from_distance(output, distance, length as usize)?;
             }
             286 | 287 => {
@@ -979,12 +1014,19 @@ impl<'a> BitReader<'a> {
 mod tests {
     use alloc::vec;
 
+    use core::assert_matches;
+
     use super::{decompress, encode_dynamic_literals};
+    use crate::png_types::Error;
+
+    /// The tests below exercise streams whose decoded size is known, so they
+    /// pass a cap that comfortably exceeds it.
+    const NO_CAP: usize = usize::MAX;
 
     #[test]
     fn decode_known_fixed_block() {
         let input = [243, 72, 205, 201, 201, 87, 8, 207, 47, 202, 73, 81, 4, 0];
-        let decoded = decompress(&input).expect("infallible");
+        let decoded = decompress(&input, NO_CAP).expect("infallible");
         assert_eq!(decoded, b"Hello World!");
     }
 
@@ -993,14 +1035,14 @@ mod tests {
         let input = [
             1, 12, 0, 243, 255, 72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100, 33,
         ];
-        let decoded = decompress(&input).expect("infallible");
+        let decoded = decompress(&input, NO_CAP).expect("infallible");
         assert_eq!(decoded, b"Hello World!");
     }
 
     #[test]
     fn decode_known_dynamic_block() {
         let input = [75, 76, 42, 74, 76, 78, 76, 73, 4, 82, 10, 137, 216, 217, 0];
-        let decoded = decompress(&input).expect("infallible");
+        let decoded = decompress(&input, NO_CAP).expect("infallible");
         assert_eq!(decoded, b"abracadabra abracadabra abracadabra");
     }
 
@@ -1008,7 +1050,7 @@ mod tests {
     fn encode_dynamic_literals_roundtrip() {
         let input = b"banana banana banana banana";
         let encoded = encode_dynamic_literals(input).expect("infallible");
-        let decoded = decompress(&encoded).expect("infallible");
+        let decoded = decompress(&encoded, NO_CAP).expect("infallible");
         assert_eq!(decoded, input);
     }
 
@@ -1016,8 +1058,32 @@ mod tests {
     fn encode_dynamic_literals_uses_matches_for_repetition() {
         let input = vec![b'a'; 2048];
         let encoded = encode_dynamic_literals(&input).expect("infallible");
-        let decoded = decompress(&encoded).expect("infallible");
+        let decoded = decompress(&encoded, NO_CAP).expect("infallible");
         assert_eq!(decoded, input);
         assert!(encoded.len() < 64);
+    }
+
+    #[test]
+    fn rejects_output_larger_than_the_cap() {
+        let encoded = encode_dynamic_literals(&vec![b'a'; 4096]).expect("infallible");
+        let error = decompress(&encoded, 1024).expect_err("decoding must fail");
+        assert_matches!(error, Error::InvalidData(_));
+    }
+
+    #[test]
+    fn accepts_output_exactly_at_the_cap() {
+        let input = b"Hello World!";
+        let encoded = encode_dynamic_literals(input).expect("infallible");
+        let decoded = decompress(&encoded, input.len()).expect("infallible");
+        assert_eq!(decoded, input);
+    }
+
+    #[test]
+    fn rejects_raw_block_larger_than_the_cap() {
+        let input = [
+            1, 12, 0, 243, 255, 72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100, 33,
+        ];
+        let error = decompress(&input, 4).expect_err("decoding must fail");
+        assert_matches!(error, Error::InvalidData(_));
     }
 }
