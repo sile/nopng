@@ -16,7 +16,7 @@ const CT_INDEXED: u8 = IhdrChunk::COLOR_TYPE_INDEXED;
 const CT_GRAY_ALPHA: u8 = IhdrChunk::COLOR_TYPE_GRAYSCALE_ALPHA;
 const CT_RGBA: u8 = IhdrChunk::COLOR_TYPE_RGBA;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PngHeader {
     pub(crate) width: u32,
     pub(crate) height: u32,
@@ -205,32 +205,32 @@ impl AncillaryChunks {
     }
 }
 
-struct Cursor<'a> {
+pub(crate) struct Cursor<'a> {
     bytes: &'a [u8],
     offset: usize,
 }
 
 impl<'a> Cursor<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
+    pub(crate) fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, offset: 0 }
     }
 
-    fn remaining(&self) -> usize {
+    pub(crate) fn remaining(&self) -> usize {
         self.bytes.len().saturating_sub(self.offset)
     }
 
-    fn read_u32(&mut self) -> Result<u32> {
+    pub(crate) fn read_u32(&mut self) -> Result<u32> {
         Ok(u32::from_be_bytes(self.read_array::<4>()?))
     }
 
-    fn read_array<const N: usize>(&mut self) -> Result<[u8; N]> {
+    pub(crate) fn read_array<const N: usize>(&mut self) -> Result<[u8; N]> {
         let bytes = self.read_bytes(N)?;
         Ok(bytes
             .try_into()
             .expect("bug: read_array must return exactly N bytes"))
     }
 
-    fn read_bytes(&mut self, len: usize) -> Result<&'a [u8]> {
+    pub(crate) fn read_bytes(&mut self, len: usize) -> Result<&'a [u8]> {
         let end = self
             .offset
             .checked_add(len)

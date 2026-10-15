@@ -112,6 +112,7 @@
 extern crate alloc;
 
 mod adler32;
+mod apng;
 mod chunk;
 mod crc;
 mod deflate;
