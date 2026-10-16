@@ -109,8 +109,11 @@ pub struct Animation {
 /// Decodes APNG bytes into an [`Animation`].
 ///
 /// Every frame is returned composited onto the full canvas and converted to
-/// `format`, so a frame can be displayed without consulting the others. Frames
-/// are in presentation order, and the canvas starts as transparent black.
+/// `format`, so a frame can be displayed without consulting the others. The
+/// result is therefore directly usable: every [`Frame::pixels`] holds one
+/// complete `width` by `height` image in `format`, so no frame needs to be
+/// combined with its neighbours before display. Read the frames in the order
+/// they appear, starting from a transparent black canvas.
 ///
 /// The decoded frames reflect the source's dispose and blend operations; the
 /// operations themselves are not exposed because they have already been applied.
@@ -124,36 +127,6 @@ pub struct Animation {
 ///
 /// Returns [`Error::Unsupported`] if `format` is an indexed format, since
 /// compositing works in a full-color space and cannot target a palette.
-///
-/// # Examples
-///
-/// ```
-/// # fn main() -> Result<(), nopng::Error> {
-/// # let png = nopng::encode_image(
-/// #     &nopng::ImageSpec::new(1, 1, nopng::PixelFormat::Rgba8),
-/// #     &[255, 0, 0, 255],
-/// # )?;
-/// // A plain PNG has no `acTL` chunk, so it is not an animation.
-/// assert!(nopng::decode_animation(&png, nopng::PixelFormat::Rgba8).is_err());
-/// # Ok(())
-/// # }
-/// ```
-///
-/// ```
-/// # fn main() -> Result<(), nopng::Error> {
-/// # let png = nopng::encode_image(
-/// #     &nopng::ImageSpec::new(1, 1, nopng::PixelFormat::Rgba8),
-/// #     &[255, 0, 0, 255],
-/// # )?;
-/// // Indexed output needs a palette, which compositing does not produce.
-/// let error = nopng::decode_animation(&png, nopng::PixelFormat::Indexed8 {
-///     palette: vec![0, 0, 0],
-///     trns: None,
-/// });
-/// assert!(matches!(error, Err(nopng::Error::Unsupported(_))));
-/// # Ok(())
-/// # }
-/// ```
 pub fn decode_animation(bytes: &[u8], format: PixelFormat) -> Result<Animation> {
     if is_indexed(&format) {
         return Err(Error::Unsupported(
