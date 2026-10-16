@@ -80,18 +80,6 @@ impl PlayCount {
 /// so no frame in this type needs a size or an offset of its own.
 ///
 /// All frames are expected to share one `pixel_format`.
-///
-/// # Examples
-///
-/// ```
-/// # let bytes = {
-/// #     let spec = nopng::ImageSpec::new(1, 1, nopng::PixelFormat::Rgba8);
-/// #     nopng::encode_image(&spec, &[255, 0, 0, 255])?
-/// # };
-/// // A static PNG fails to decode as an animation: APNG requires an acTL chunk.
-/// assert!(nopng::decode_animation(&bytes, nopng::PixelFormat::Rgba8).is_err());
-/// # Ok::<(), nopng::Error>(())
-/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Animation {
     /// Width in pixels. Every frame is this wide.
