@@ -71,12 +71,15 @@ impl PlayCount {
 
 /// A decoded (or to-be-encoded) animated PNG.
 ///
-/// Unlike a static image, an animation carries a **canvas** size that is
-/// independent of any individual frame's rectangle, plus a play count and the
-/// ordered list of composited frames.
+/// Unlike a static image, an animation carries a width and height, a play
+/// count, and an ordered list of composited frames.
 ///
-/// All frames are expected to share one `pixel_format`, and `width`/`height`
-/// describe every frame's buffer (each frame is full-canvas).
+/// The width and height are stored once here rather than per frame, because
+/// every frame is that size. On the wire an APNG frame may be a sub-rectangle
+/// drawn over the previous frame; decoding expands each one to the full canvas,
+/// so no frame in this type needs a size or an offset of its own.
+///
+/// All frames are expected to share one `pixel_format`.
 ///
 /// # Examples
 ///
@@ -91,9 +94,9 @@ impl PlayCount {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Animation {
-    /// Canvas width in pixels. Every frame is this wide.
+    /// Width in pixels. Every frame is this wide.
     pub width: u32,
-    /// Canvas height in pixels. Every frame is this tall.
+    /// Height in pixels. Every frame is this tall.
     pub height: u32,
     /// Pixel format shared by every frame's buffer.
     pub pixel_format: PixelFormat,
