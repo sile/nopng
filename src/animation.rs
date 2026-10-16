@@ -106,7 +106,7 @@ pub struct Animation {
     pub frames: Vec<Frame>,
 }
 
-/// Decodes an APNG byte stream into an [`Animation`].
+/// Decodes APNG bytes into an [`Animation`].
 ///
 /// Every frame is returned composited onto the full canvas and converted to
 /// `format`, so a frame can be displayed without consulting the others. Frames
