@@ -65,14 +65,8 @@ pub enum PlayCount {
 impl PlayCount {
     /// Play the animation exactly once.
     ///
-    /// Equivalent to `PlayCount::Finite(NonZeroU32::new(1).expect("1 is non-zero"))`,
-    /// but available in `const` contexts.
-    pub const ONCE: PlayCount = match NonZeroU32::new(1) {
-        Some(one) => PlayCount::Finite(one),
-        // `NonZeroU32::new(1)` is never `None`; this arm exists only because
-        // `Option::unwrap` is not `const`. It is unreachable.
-        None => PlayCount::Infinite,
-    };
+    /// Equivalent to `PlayCount::Finite(NonZeroU32::MIN)`.
+    pub const ONCE: PlayCount = PlayCount::Finite(NonZeroU32::MIN);
 }
 
 /// A decoded (or to-be-encoded) animated PNG.
