@@ -106,17 +106,6 @@ pub struct Animation {
     pub frames: Vec<Frame>,
 }
 
-impl Animation {
-    /// Expected byte length of one frame's pixel buffer.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the total size overflows `usize`.
-    pub fn frame_data_len(&self) -> usize {
-        self.pixel_format.data_len(self.width, self.height)
-    }
-}
-
 /// Decodes an APNG byte stream into an [`Animation`].
 ///
 /// Every frame is returned composited onto the full canvas and converted to
