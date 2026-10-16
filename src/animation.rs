@@ -128,7 +128,7 @@ pub struct Animation {
 /// Returns [`Error::Unsupported`] if `format` is an indexed format, since
 /// compositing works in a full-color space and cannot target a palette.
 pub fn decode_animation(bytes: &[u8], format: PixelFormat) -> Result<Animation> {
-    if is_indexed(&format) {
+    if format.is_indexed() {
         return Err(Error::Unsupported(
             "compositing cannot target an indexed pixel format".into(),
         ));
@@ -156,16 +156,6 @@ pub fn decode_animation(bytes: &[u8], format: PixelFormat) -> Result<Animation> 
         play_count: play_count_from_u32(composited.num_plays),
         frames,
     })
-}
-
-fn is_indexed(format: &PixelFormat) -> bool {
-    matches!(
-        format,
-        PixelFormat::Indexed1 { .. }
-            | PixelFormat::Indexed2 { .. }
-            | PixelFormat::Indexed4 { .. }
-            | PixelFormat::Indexed8 { .. }
-    )
 }
 
 /// APNG treats a `delay_den` of `0` as `100`; the type forbids zero, so the
