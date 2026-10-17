@@ -21,7 +21,7 @@
 //! # Ok::<(), nopng::Error>(())
 //! ```
 //!
-//! Decode a PNG and convert to RGBA8:
+//! Convert decoded pixels to RGBA8 with `reformat_pixels`:
 //!
 //! ```
 //! # let png_bytes = nopng::encode_image(
@@ -52,7 +52,8 @@
 //! match spec.pixel_format {
 //!     nopng::PixelFormat::Rgba8 => { /* 4 bytes per pixel */ }
 //!     nopng::PixelFormat::Gray8 => { /* 1 byte per pixel */ }
-//!     _ => { /* ... */ }
+//!     nopng::PixelFormat::Rgba16Be => { /* 8 bytes per pixel */ }
+//!     _ => { /* alpha, 16-bit gray/RGB, or indexed */ }
 //! }
 //! # Ok::<(), nopng::Error>(())
 //! ```

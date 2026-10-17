@@ -73,8 +73,9 @@ pub(crate) const ADAM7_PASSES: [Adam7Pass; 7] = [
 /// # Pixel data layout
 ///
 /// The accompanying pixel buffer is a flat `&[u8]` laid out in row-major order
-/// (top-to-bottom, left-to-right) according to [`pixel_format`](Self::pixel_format).
-/// Its expected byte length is given by [`data_len`](Self::data_len).
+/// (top-to-bottom, left-to-right) according to
+/// [`ImageSpec::pixel_format`](ImageSpec::pixel_format). Its expected byte length
+/// is given by [`ImageSpec::data_len()`](ImageSpec::data_len).
 ///
 /// # Examples
 ///

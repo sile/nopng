@@ -81,7 +81,8 @@ impl CoreError for Error {
 /// match spec.pixel_format {
 ///     nopng::PixelFormat::Rgba8 => { /* 4 bytes per pixel */ }
 ///     nopng::PixelFormat::Gray8 => { /* 1 byte per pixel */ }
-///     _ => { /* ... */ }
+///     nopng::PixelFormat::Rgba16Be => { /* 8 bytes per pixel */ }
+///     _ => { /* alpha, 16-bit gray/RGB, or indexed */ }
 /// }
 ///
 /// let is_16bit = matches!(
