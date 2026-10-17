@@ -70,8 +70,8 @@ impl CoreError for Error {
 /// ```
 /// # let png_bytes = nopng::encode_image(
 /// #     &nopng::ImageSpec {
-/// #         width: core::num::NonZeroU32::new(1).expect("1 is non-zero"),
-/// #         height: core::num::NonZeroU32::new(1).expect("1 is non-zero"),
+/// #         width: std::num::NonZeroU32::new(1).expect("1 is non-zero"),
+/// #         height: std::num::NonZeroU32::new(1).expect("1 is non-zero"),
 /// #         pixel_format: nopng::PixelFormat::Rgba8,
 /// #     },
 /// #     &[255, 0, 0, 255],

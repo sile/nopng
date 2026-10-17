@@ -82,8 +82,8 @@ pub(crate) const ADAM7_PASSES: [Adam7Pass; 7] = [
 /// ```
 /// # let png_bytes = nopng::encode_image(
 /// #     &nopng::ImageSpec {
-/// #         width: core::num::NonZeroU32::new(1).expect("1 is non-zero"),
-/// #         height: core::num::NonZeroU32::new(1).expect("1 is non-zero"),
+/// #         width: std::num::NonZeroU32::new(1).expect("1 is non-zero"),
+/// #         height: std::num::NonZeroU32::new(1).expect("1 is non-zero"),
 /// #         pixel_format: nopng::PixelFormat::Rgba8,
 /// #     },
 /// #     &[255, 0, 0, 255],
@@ -97,8 +97,8 @@ pub(crate) const ADAM7_PASSES: [Adam7Pass; 7] = [
 ///
 /// ```
 /// let spec = nopng::ImageSpec {
-///     width: core::num::NonZeroU32::new(2).expect("2 is non-zero"),
-///     height: core::num::NonZeroU32::new(2).expect("2 is non-zero"),
+///     width: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
+///     height: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
 ///     pixel_format: nopng::PixelFormat::Rgba8,
 /// };
 /// let pixels = vec![0u8; spec.data_len()];
@@ -240,8 +240,8 @@ fn pixel_format_from_header(
 /// ```
 /// # let png_bytes = nopng::encode_image(
 /// #     &nopng::ImageSpec {
-/// #         width: core::num::NonZeroU32::new(1).expect("1 is non-zero"),
-/// #         height: core::num::NonZeroU32::new(1).expect("1 is non-zero"),
+/// #         width: std::num::NonZeroU32::new(1).expect("1 is non-zero"),
+/// #         height: std::num::NonZeroU32::new(1).expect("1 is non-zero"),
 /// #         pixel_format: nopng::PixelFormat::Gray8,
 /// #     },
 /// #     &[128],
@@ -284,8 +284,8 @@ pub fn decode_image(bytes: &[u8]) -> Result<(ImageSpec, Vec<u8>)> {
 /// ```
 /// # let png_bytes = nopng::encode_image(
 /// #     &nopng::ImageSpec {
-/// #         width: core::num::NonZeroU32::new(1).expect("1 is non-zero"),
-/// #         height: core::num::NonZeroU32::new(1).expect("1 is non-zero"),
+/// #         width: std::num::NonZeroU32::new(1).expect("1 is non-zero"),
+/// #         height: std::num::NonZeroU32::new(1).expect("1 is non-zero"),
 /// #         pixel_format: nopng::PixelFormat::Gray8,
 /// #     },
 /// #     &[128],
@@ -329,8 +329,8 @@ pub fn encode_image(spec: &ImageSpec, data: &[u8]) -> Result<Vec<u8>> {
 ///
 /// ```
 /// let spec = nopng::ImageSpec {
-///     width: core::num::NonZeroU32::new(2).expect("2 is non-zero"),
-///     height: core::num::NonZeroU32::new(2).expect("2 is non-zero"),
+///     width: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
+///     height: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
 ///     pixel_format: nopng::PixelFormat::Rgba8,
 /// };
 /// let pixels = vec![0u8; spec.data_len()];

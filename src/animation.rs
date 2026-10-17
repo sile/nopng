@@ -132,8 +132,8 @@ pub fn encode_animation(animation: &Animation) -> Result<Vec<u8>> {
 ///
 /// ```
 /// let animation = nopng::Animation {
-///     width: core::num::NonZeroU32::new(2).expect("2 is non-zero"),
-///     height: core::num::NonZeroU32::new(2).expect("2 is non-zero"),
+///     width: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
+///     height: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
 ///     pixel_format: nopng::PixelFormat::Rgba8,
 ///     play_count: nopng::PlayCount::Infinite,
 ///     frames: vec![
