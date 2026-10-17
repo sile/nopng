@@ -1,7 +1,7 @@
-//! Encoding of [`crate::Animation`] into APNG bytes.
+//! Encoding of [`Animation`](crate::Animation) into APNG bytes.
 //!
 //! The public API exposes frames as full-canvas images (see
-//! [`crate::Animation`]), so encoding never needs sub-rectangles or dispose/
+//! [`Animation`](crate::Animation)), so encoding never needs sub-rectangles or dispose/
 //! blend operations: every frame is written as a full-canvas `SOURCE` frame
 //! with `NONE` dispose. Frame 0 goes into `IDAT` (with its `fcTL` before the
 //! `IDAT`), and each later frame becomes a `fcTL`/`fdAT` pair.

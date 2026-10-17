@@ -141,7 +141,7 @@ pub fn encode_animation(animation: &Animation) -> Result<Vec<u8>> {
 ///             pixels: vec![255, 0, 0, 255].repeat(4),
 ///             delay: nopng::Delay {
 ///                 num: 1,
-///                 den: core::num::NonZeroU16::new(10).expect("10 is non-zero"),
+///                 den: std::num::NonZeroU16::new(10).expect("10 is non-zero"),
 ///             },
 ///         },
 ///     ],

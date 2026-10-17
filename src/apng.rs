@@ -3,7 +3,8 @@
 //! This module owns the wire format of the APNG chunks (`acTL`, `fcTL`, `fdAT`)
 //! and the walker that turns a PNG byte stream into the raw per-frame data the
 //! decoder composites. Nothing here is public: the frozen public API only
-//! exposes [`crate::decode_animation`] and [`crate::encode_animation`], and all
+//! exposes [`decode_animation`](crate::decode_animation) and
+//! [`encode_animation`](crate::encode_animation), and all
 //! of the rect/dispose/blend/sequence bookkeeping is an implementation detail.
 
 use alloc::format;
@@ -546,7 +547,4 @@ mod tests {
         ]);
         bytes[crc_pos..crc_pos + 4].copy_from_slice(&crc.to_be_bytes());
     }
-
-    #[allow(unused_imports)]
-    use alloc::format;
 }

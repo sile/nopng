@@ -53,7 +53,7 @@ pub(crate) const ADAM7_PASSES: [Adam7Pass; 7] = [
     },
 ];
 
-/// Image metadata describing dimensions, pixel format and interlacing.
+/// Image metadata describing dimensions and pixel format.
 ///
 /// `ImageSpec` serves two roles:
 ///
