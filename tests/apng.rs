@@ -14,16 +14,11 @@
 
 use core::num::{NonZeroU16, NonZeroU32};
 
-/// Narrows a literal dimension to the `NonZeroU32` the public types require.
-fn nz(value: u32) -> NonZeroU32 {
-    NonZeroU32::new(value).expect("test dimensions are non-zero")
-}
-
 /// Builds an [`nopng::ImageSpec`] from literal dimensions.
 fn image_spec(width: u32, height: u32, pixel_format: nopng::PixelFormat) -> nopng::ImageSpec {
     nopng::ImageSpec {
-        width: nz(width),
-        height: nz(height),
+        width: NonZeroU32::new(width).expect("test dimensions are non-zero"),
+        height: NonZeroU32::new(height).expect("test dimensions are non-zero"),
         pixel_format,
     }
 }
@@ -759,8 +754,8 @@ fn animation(canvas: u32, colors: &[[u8; 4]], play_count: nopng::PlayCount) -> n
         })
         .collect();
     nopng::Animation {
-        width: nz(canvas),
-        height: nz(canvas),
+        width: NonZeroU32::new(canvas).expect("test dimensions are non-zero"),
+        height: NonZeroU32::new(canvas).expect("test dimensions are non-zero"),
         pixel_format: nopng::PixelFormat::Rgba8,
         play_count,
         frames,
