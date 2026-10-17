@@ -26,13 +26,13 @@ Examples
 
 ```rust
 fn main() -> Result<(), nopng::Error> {
-    let spec = nopng::ImageSpec {
+    let image = nopng::Image {
         width: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
         height: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
         pixel_format: nopng::PixelFormat::Rgba8,
+        pixels: vec![255u8; 2 * 2 * 4], // white, fully opaque
     };
-    let pixels = vec![255u8; spec.data_len()]; // white, fully opaque
-    let png_bytes = nopng::encode_image(&spec, &pixels)?;
+    let png_bytes = nopng::encode_image(&image)?;
     Ok(())
 }
 ```
@@ -41,16 +41,20 @@ fn main() -> Result<(), nopng::Error> {
 
 ```rust
 fn main() -> Result<(), nopng::Error> {
-    let spec = nopng::ImageSpec {
+    let image = nopng::Image {
         width: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
         height: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
         pixel_format: nopng::PixelFormat::Rgba8,
+        pixels: vec![255u8; 2 * 2 * 4],
     };
-    let pixels = vec![255u8; spec.data_len()];
-    let png_bytes = nopng::encode_image(&spec, &pixels)?;
+    let png_bytes = nopng::encode_image(&image)?;
 
-    let (spec, pixels) = nopng::decode_image(&png_bytes)?;
-    let rgba = nopng::reformat_pixels(&spec.pixel_format, &pixels, &nopng::PixelFormat::Rgba8)?;
+    let decoded = nopng::decode_image(&png_bytes)?;
+    let rgba = nopng::reformat_pixels(
+        &decoded.pixel_format,
+        &decoded.pixels,
+        &nopng::PixelFormat::Rgba8,
+    )?;
     Ok(())
 }
 ```
@@ -65,13 +69,13 @@ fn main() -> Result<(), nopng::Error> {
         0, 0, 255,   // index 2: blue
         255, 255, 0, // index 3: yellow
     ];
-    let spec = nopng::ImageSpec {
+    let image = nopng::Image {
         width: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
         height: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
         pixel_format: nopng::PixelFormat::Indexed8 { palette, trns: None },
+        pixels: vec![0, 1, 2, 3], // one index per pixel
     };
-    let indices = vec![0, 1, 2, 3]; // one index per pixel
-    let png_bytes = nopng::encode_image(&spec, &indices)?;
+    let png_bytes = nopng::encode_image(&image)?;
     Ok(())
 }
 ```

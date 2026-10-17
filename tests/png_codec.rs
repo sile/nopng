@@ -28,12 +28,18 @@ fn sample_dimensions(ctx: &mut noprop::TestCaseContext, max: u32) -> (u32, u32) 
     )
 }
 
-/// Builds an [`nopng::ImageSpec`] from sampled dimensions and a format.
-fn image_spec(width: u32, height: u32, pixel_format: nopng::PixelFormat) -> nopng::ImageSpec {
-    nopng::ImageSpec {
+/// Builds an [`nopng::Image`] from sampled dimensions and a pixel buffer.
+fn image(
+    width: u32,
+    height: u32,
+    pixel_format: nopng::PixelFormat,
+    pixels: Vec<u8>,
+) -> nopng::Image {
+    nopng::Image {
         width: core::num::NonZeroU32::new(width).expect("sample_dimensions is 1..=max"),
         height: core::num::NonZeroU32::new(height).expect("sample_dimensions is 1..=max"),
         pixel_format,
+        pixels,
     }
 }
 
@@ -89,18 +95,18 @@ fn roundtrip_random_rgba() -> noprop::TestResult {
         let (width, height) = sample_dimensions(ctx, 8);
         let interlaced = noprop::sample_bool(ctx);
         let data = sample_rgba8(ctx, width, height);
-        let spec = image_spec(width, height, nopng::PixelFormat::Rgba8);
+        let image = image(width, height, nopng::PixelFormat::Rgba8, data.clone());
         let encoded = if interlaced {
-            nopng::encode_image_interlaced(&spec, &data)
+            nopng::encode_image_interlaced(&image)
         } else {
-            nopng::encode_image(&spec, &data)
+            nopng::encode_image(&image)
         }
         .expect("infallible");
 
-        let (decoded_spec, decoded_data) = nopng::decode_image(&encoded).expect("infallible");
-        assert_eq!(decoded_spec.width.get(), width);
-        assert_eq!(decoded_spec.height.get(), height);
-        assert_eq!(decoded_data, data);
+        let decoded = nopng::decode_image(&encoded).expect("infallible");
+        assert_eq!(decoded.width.get(), width);
+        assert_eq!(decoded.height.get(), height);
+        assert_eq!(decoded.pixels, data);
 
         if interlaced {
             interlaced_cases.set(interlaced_cases.get() + 1);
@@ -129,13 +135,13 @@ fn roundtrip_random_rgba16() -> noprop::TestResult {
     runner.run(CASES, |ctx| {
         let (width, height) = sample_dimensions(ctx, 8);
         let data = sample_rgba16_be(ctx, width, height);
-        let spec = image_spec(width, height, nopng::PixelFormat::Rgba16Be);
-        let encoded = nopng::encode_image(&spec, &data).expect("infallible");
+        let image = image(width, height, nopng::PixelFormat::Rgba16Be, data.clone());
+        let encoded = nopng::encode_image(&image).expect("infallible");
 
-        let (decoded_spec, decoded_data) = nopng::decode_image(&encoded).expect("infallible");
-        assert_eq!(decoded_spec.width.get(), width);
-        assert_eq!(decoded_spec.height.get(), height);
-        assert_eq!(decoded_data, data);
+        let decoded = nopng::decode_image(&encoded).expect("infallible");
+        assert_eq!(decoded.width.get(), width);
+        assert_eq!(decoded.height.get(), height);
+        assert_eq!(decoded.pixels, data);
         Ok(())
     })?;
 
@@ -153,25 +159,25 @@ fn encoded_png_has_expected_grayscale() -> noprop::TestResult {
         let (width, height) = sample_dimensions(ctx, 8);
         let interlaced = noprop::sample_bool(ctx);
         let samples = sample_gray2(ctx, width, height);
-        let spec = image_spec(width, height, nopng::PixelFormat::Gray2);
+        let image = image(width, height, nopng::PixelFormat::Gray2, samples.clone());
         let encoded = if interlaced {
-            nopng::encode_image_interlaced(&spec, &samples)
+            nopng::encode_image_interlaced(&image)
         } else {
-            nopng::encode_image(&spec, &samples)
+            nopng::encode_image(&image)
         }
         .expect("infallible");
 
         // Decode with nopng and compare against an expectation built
         // directly from the sampled 2-bit samples
         // (0->0, 1->85, 2->170, 3->255).
-        let (decoded_spec, decoded_samples) = nopng::decode_image(&encoded).expect("infallible");
-        assert_eq!(decoded_spec.width.get(), width);
-        assert_eq!(decoded_spec.height.get(), height);
-        assert_eq!(decoded_samples, samples);
+        let decoded = nopng::decode_image(&encoded).expect("infallible");
+        assert_eq!(decoded.width.get(), width);
+        assert_eq!(decoded.height.get(), height);
+        assert_eq!(decoded.pixels, samples);
 
         let decoded_rgba = nopng::reformat_pixels(
-            &decoded_spec.pixel_format,
-            &decoded_samples,
+            &decoded.pixel_format,
+            &decoded.pixels,
             &nopng::PixelFormat::Rgba8,
         )
         .expect("infallible");
@@ -215,31 +221,32 @@ fn encoded_png_has_expected_indexed() -> noprop::TestResult {
         let (width, height) = sample_dimensions(ctx, 8);
         let interlaced = noprop::sample_bool(ctx);
         let indices = sample_indices4(ctx, width, height);
-        let spec = image_spec(
+        let image = image(
             width,
             height,
             nopng::PixelFormat::Indexed4 {
                 palette: palette.clone(),
                 trns: Some(trns.clone()),
             },
+            indices.clone(),
         );
         let encoded = if interlaced {
-            nopng::encode_image_interlaced(&spec, &indices)
+            nopng::encode_image_interlaced(&image)
         } else {
-            nopng::encode_image(&spec, &indices)
+            nopng::encode_image(&image)
         }
         .expect("infallible");
 
         // Decode with nopng and compare against an expectation built
         // directly from the sampled indices plus the palette and tRNS.
-        let (decoded_spec, decoded_indices) = nopng::decode_image(&encoded).expect("infallible");
-        assert_eq!(decoded_spec.width.get(), width);
-        assert_eq!(decoded_spec.height.get(), height);
-        assert_eq!(decoded_indices, indices);
+        let decoded = nopng::decode_image(&encoded).expect("infallible");
+        assert_eq!(decoded.width.get(), width);
+        assert_eq!(decoded.height.get(), height);
+        assert_eq!(decoded.pixels, indices);
 
         let decoded_rgba = nopng::reformat_pixels(
-            &decoded_spec.pixel_format,
-            &decoded_indices,
+            &decoded.pixel_format,
+            &decoded.pixels,
             &nopng::PixelFormat::Rgba8,
         )
         .expect("infallible");
@@ -337,14 +344,14 @@ fn reformat_to_rgba8_produces_expected_grayscale() -> noprop::TestResult {
     runner.run(CASES, |ctx| {
         let (width, height) = sample_dimensions(ctx, 8);
         let samples = sample_gray2(ctx, width, height);
-        let spec = image_spec(width, height, nopng::PixelFormat::Gray2);
-        let encoded = nopng::encode_image(&spec, &samples).expect("infallible");
+        let image = image(width, height, nopng::PixelFormat::Gray2, samples.clone());
+        let encoded = nopng::encode_image(&image).expect("infallible");
 
         // Decode with nopng + reformat_pixels to RGBA8.
-        let (decoded_spec, decoded_data) = nopng::decode_image(&encoded).expect("infallible");
+        let decoded = nopng::decode_image(&encoded).expect("infallible");
         let nopng_rgba = nopng::reformat_pixels(
-            &decoded_spec.pixel_format,
-            &decoded_data,
+            &decoded.pixel_format,
+            &decoded.pixels,
             &nopng::PixelFormat::Rgba8,
         )
         .expect("infallible");
@@ -375,20 +382,21 @@ fn reformat_to_rgba8_produces_expected_indexed() -> noprop::TestResult {
     runner.run(CASES, |ctx| {
         let (width, height) = sample_dimensions(ctx, 8);
         let indices = sample_indices4(ctx, width, height);
-        let spec = image_spec(
+        let image = image(
             width,
             height,
             nopng::PixelFormat::Indexed4 {
                 palette: palette.clone(),
                 trns: Some(trns.clone()),
             },
+            indices.clone(),
         );
-        let encoded = nopng::encode_image(&spec, &indices).expect("infallible");
+        let encoded = nopng::encode_image(&image).expect("infallible");
 
-        let (decoded_spec, decoded_data) = nopng::decode_image(&encoded).expect("infallible");
+        let decoded = nopng::decode_image(&encoded).expect("infallible");
         let nopng_rgba = nopng::reformat_pixels(
-            &decoded_spec.pixel_format,
-            &decoded_data,
+            &decoded.pixel_format,
+            &decoded.pixels,
             &nopng::PixelFormat::Rgba8,
         )
         .expect("infallible");
