@@ -14,12 +14,18 @@
 
 use core::num::{NonZeroU16, NonZeroU32};
 
-/// Builds an [`nopng::ImageSpec`] from literal dimensions.
-fn image_spec(width: u32, height: u32, pixel_format: nopng::PixelFormat) -> nopng::ImageSpec {
-    nopng::ImageSpec {
+/// Builds an [`nopng::Image`] from literal dimensions and a pixel buffer.
+fn image(
+    width: u32,
+    height: u32,
+    pixel_format: nopng::PixelFormat,
+    pixels: Vec<u8>,
+) -> nopng::Image {
+    nopng::Image {
         width: NonZeroU32::new(width).expect("test dimensions are non-zero"),
         height: NonZeroU32::new(height).expect("test dimensions are non-zero"),
         pixel_format,
+        pixels,
     }
 }
 
@@ -141,11 +147,16 @@ fn ihdr_of(png: &[u8]) -> [u8; 13] {
 
 /// Encodes one rectangle of RGBA8 pixels to a PNG and returns its zlib stream.
 fn zlib_for_rect(frame: &FrameSpec, interlaced: bool) -> Vec<u8> {
-    let spec = image_spec(frame.width, frame.height, nopng::PixelFormat::Rgba8);
+    let img = image(
+        frame.width,
+        frame.height,
+        nopng::PixelFormat::Rgba8,
+        frame.pixels.clone(),
+    );
     let png = if interlaced {
-        nopng::encode_image_interlaced(&spec, &frame.pixels)
+        nopng::encode_image_interlaced(&img)
     } else {
-        nopng::encode_image(&spec, &frame.pixels)
+        nopng::encode_image(&img)
     }
     .expect("infallible");
     idat_of(&png)
@@ -188,11 +199,16 @@ fn build_apng_interlaced(
     // IHDR: reuse the static encoder's header for the first frame so the bit
     // depth and color type are guaranteed consistent with the pixel data.
     let first = &frames[0];
-    let probe_spec = image_spec(first.width, first.height, nopng::PixelFormat::Rgba8);
+    let probe_image = image(
+        first.width,
+        first.height,
+        nopng::PixelFormat::Rgba8,
+        first.pixels.clone(),
+    );
     let probe = if interlaced {
-        nopng::encode_image_interlaced(&probe_spec, &first.pixels)
+        nopng::encode_image_interlaced(&probe_image)
     } else {
-        nopng::encode_image(&probe_spec, &first.pixels)
+        nopng::encode_image(&probe_image)
     }
     .expect("infallible");
     let mut ihdr = ihdr_of(&probe);
@@ -665,7 +681,7 @@ fn decodes_interlaced_frames() {
 
 #[test]
 fn static_png_is_not_an_animation() {
-    let png = nopng::encode_image(&image_spec(2, 2, nopng::PixelFormat::Rgba8), &solid(2, RED))
+    let png = nopng::encode_image(&image(2, 2, nopng::PixelFormat::Rgba8, solid(2, RED)))
         .expect("infallible");
     let error = nopng::decode_animation(&png).expect_err("a static PNG has no acTL");
     assert!(
@@ -874,8 +890,8 @@ fn inspect_reports_a_single_frame_as_animated() {
 
 #[test]
 fn inspect_reports_a_static_image() {
-    let spec = image_spec(2, 3, nopng::PixelFormat::Rgba8);
-    let bytes = nopng::encode_image(&spec, &vec![0u8; spec.data_len()]).expect("infallible");
+    let img = image(2, 3, nopng::PixelFormat::Rgba8, vec![0u8; 2 * 3 * 4]);
+    let bytes = nopng::encode_image(&img).expect("infallible");
     let info = nopng::inspect(&bytes).expect("inspect must succeed");
     assert_eq!(info.width.get(), 2);
     assert_eq!(info.height.get(), 3);
@@ -883,7 +899,7 @@ fn inspect_reports_a_static_image() {
     assert!(!info.animated);
     assert!(!info.interlaced);
     assert_eq!(info.pixel_format, nopng::PixelFormat::Rgba8);
-    assert_eq!(info.decoded_len(), spec.data_len());
+    assert_eq!(info.decoded_len(), img.pixels.len());
 }
 
 #[test]

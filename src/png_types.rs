@@ -69,16 +69,16 @@ impl CoreError for Error {
 ///
 /// ```
 /// # let png_bytes = nopng::encode_image(
-/// #     &nopng::ImageSpec {
+/// #     &nopng::Image {
 /// #         width: std::num::NonZeroU32::MIN,
 /// #         height: std::num::NonZeroU32::MIN,
 /// #         pixel_format: nopng::PixelFormat::Rgba8,
+/// #         pixels: vec![255, 0, 0, 255],
 /// #     },
-/// #     &[255, 0, 0, 255],
 /// # )?;
-/// let (spec, pixels) = nopng::decode_image(&png_bytes)?;
+/// let image = nopng::decode_image(&png_bytes)?;
 ///
-/// match spec.pixel_format {
+/// match image.pixel_format {
 ///     nopng::PixelFormat::Rgba8 => { /* 4 bytes per pixel */ }
 ///     nopng::PixelFormat::Gray8 => { /* 1 byte per pixel */ }
 ///     nopng::PixelFormat::Rgba16Be => { /* 8 bytes per pixel */ }
@@ -86,7 +86,7 @@ impl CoreError for Error {
 /// }
 ///
 /// let is_16bit = matches!(
-///     spec.pixel_format,
+///     image.pixel_format,
 ///     nopng::PixelFormat::Gray16Be
 ///         | nopng::PixelFormat::GrayAlpha16Be
 ///         | nopng::PixelFormat::Rgb16Be
@@ -94,7 +94,7 @@ impl CoreError for Error {
 /// );
 ///
 /// let is_indexed = matches!(
-///     spec.pixel_format,
+///     image.pixel_format,
 ///     nopng::PixelFormat::Indexed1 { .. }
 ///         | nopng::PixelFormat::Indexed2 { .. }
 ///         | nopng::PixelFormat::Indexed4 { .. }
@@ -204,7 +204,7 @@ impl PixelFormat {
     /// Expected byte length of the pixel data buffer for the given dimensions.
     ///
     /// This is useful when you need to know the buffer size before constructing
-    /// an [`ImageSpec`](crate::ImageSpec) — for example, to pre-allocate a
+    /// an [`Image`](crate::Image) — for example, to pre-allocate a
     /// buffer or to estimate the size after a format conversion.
     ///
     /// ```
