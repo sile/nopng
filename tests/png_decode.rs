@@ -17,7 +17,12 @@ fn image(
 
 fn rgba8(bytes: &[u8]) -> Vec<u8> {
     let image = nopng::decode_image(bytes).expect("infallible");
-    assert_eq!(image.pixels.len(), image.data_len());
+    assert_eq!(
+        image.pixels.len(),
+        image
+            .pixel_format
+            .data_len(image.width.get(), image.height.get())
+    );
     nopng::reformat_pixels(
         &image.pixel_format,
         &image.pixels,

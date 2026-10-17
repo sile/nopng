@@ -79,7 +79,10 @@ pub(crate) const ADAM7_PASSES: [Adam7Pass; 7] = [
 ///
 /// `pixels` is a flat `Vec<u8>` laid out in row-major order (top-to-bottom,
 /// left-to-right) according to [`Image::pixel_format`](Image::pixel_format).
-/// Its expected byte length is given by [`Image::data_len()`](Image::data_len).
+/// Its expected byte length is
+/// [`PixelFormat::data_len`](crate::PixelFormat::data_len) applied to
+/// `width` and `height`. For a decoded or accepted `Image` that is simply
+/// `pixels.len()`.
 ///
 /// # Examples
 ///
@@ -95,7 +98,7 @@ pub(crate) const ADAM7_PASSES: [Adam7Pass; 7] = [
 /// #     },
 /// # )?;
 /// let image = nopng::decode_image(&png_bytes)?;
-/// assert_eq!(image.pixels.len(), image.data_len());
+/// assert_eq!(image.pixels.len(), 4);
 /// # Ok::<(), nopng::Error>(())
 /// ```
 ///
@@ -123,21 +126,6 @@ pub struct Image {
     pub pixel_format: PixelFormat,
     /// Pixel data, in row-major order and in `pixel_format`.
     pub pixels: Vec<u8>,
-}
-
-impl Image {
-    /// Expected byte length of this image's pixel buffer.
-    ///
-    /// Always equal to `self.pixels.len()` for an `Image` that came from
-    /// [`decode_image`] or was accepted by [`encode_image`].
-    ///
-    /// # Panics
-    ///
-    /// Panics if the total size overflows `usize`.
-    pub fn data_len(&self) -> usize {
-        self.pixel_format
-            .data_len(self.width.get(), self.height.get())
-    }
 }
 
 /// The dimensions and pixel format implied by a PNG header and its ancillary
@@ -399,8 +387,10 @@ pub fn reformat_pixels(
 /// The result is a non-interlaced PNG. Use [`encode_image_interlaced`] for the
 /// Adam7 variant.
 ///
-/// `image.pixels` must match `image.pixel_format` and have length
-/// [`Image::data_len()`]; otherwise [`Error::InvalidData`] is returned.
+/// `image.pixels` must match `image.pixel_format` and have the byte length
+/// [`PixelFormat::data_len`](crate::PixelFormat::data_len) prescribes for
+/// `image.width` and `image.height`; otherwise [`Error::InvalidData`] is
+/// returned.
 pub fn encode_image(image: &Image) -> Result<Vec<u8>> {
     encode_image_with_interlace(image, false)
 }
@@ -416,8 +406,10 @@ pub fn encode_image(image: &Image) -> Result<Vec<u8>> {
 /// The two encoders differ only in how the scanlines are arranged on the wire;
 /// decoding either returns the same pixels in the same buffer layout.
 ///
-/// `image.pixels` must match `image.pixel_format` and have length
-/// [`Image::data_len()`]; otherwise [`Error::InvalidData`] is returned.
+/// `image.pixels` must match `image.pixel_format` and have the byte length
+/// [`PixelFormat::data_len`](crate::PixelFormat::data_len) prescribes for
+/// `image.width` and `image.height`; otherwise [`Error::InvalidData`] is
+/// returned.
 ///
 /// # Examples
 ///

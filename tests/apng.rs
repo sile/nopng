@@ -899,7 +899,7 @@ fn inspect_reports_a_static_image() {
     assert!(!info.animated);
     assert!(!info.interlaced);
     assert_eq!(info.pixel_format, nopng::PixelFormat::Rgba8);
-    assert_eq!(info.decoded_len(), img.data_len());
+    assert_eq!(info.decoded_len(), img.pixels.len());
 }
 
 #[test]
