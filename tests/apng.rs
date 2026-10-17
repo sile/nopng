@@ -725,3 +725,123 @@ fn first_frame_must_cover_the_canvas() {
         "got {error:?}"
     );
 }
+
+// ── Encoding ────────────────────────────────────────────────────────────
+
+/// Builds an [`nopng::Animation`] of `frames` full-canvas RGBA8 frames.
+fn animation(canvas: u32, colors: &[[u8; 4]], play_count: nopng::PlayCount) -> nopng::Animation {
+    let frames = colors
+        .iter()
+        .map(|&color| nopng::Frame {
+            pixels: solid(canvas, color),
+            delay: nopng::Delay {
+                num: 1,
+                den: NonZeroU16::new(10).expect("10 is non-zero"),
+            },
+        })
+        .collect();
+    nopng::Animation {
+        width: canvas,
+        height: canvas,
+        pixel_format: nopng::PixelFormat::Rgba8,
+        play_count,
+        frames,
+    }
+}
+
+#[test]
+fn encodes_a_round_trippable_animation() {
+    let original = animation(2, &[RED, GREEN, BLUE], nopng::PlayCount::Infinite);
+    let bytes = nopng::encode_animation(&original).expect("encode must succeed");
+
+    let (decoded, delays) = decode_rgba8(&bytes);
+    assert_eq!(decoded.width, 2);
+    assert_eq!(decoded.height, 2);
+    assert_eq!(decoded.play_count, nopng::PlayCount::Infinite);
+    assert_eq!(decoded.frames.len(), 3);
+    assert_eq!(decoded.frames[0].pixels, solid(2, RED));
+    assert_eq!(decoded.frames[1].pixels, solid(2, GREEN));
+    assert_eq!(decoded.frames[2].pixels, solid(2, BLUE));
+    assert_eq!(delays, vec![(1, 10), (1, 10), (1, 10)]);
+}
+
+#[test]
+fn encoded_stream_uses_idat_for_frame_zero_and_fdat_for_the_rest() {
+    // The encoder must interleave chunks the way the decoder expects: fcTL(0),
+    // IDAT, fcTL(1), fdAT(1), ... Emitting all fcTLs up front (or a fdAT before
+    // IDAT) would round-trip through this same decoder but violate the spec.
+    let bytes = nopng::encode_animation(&animation(2, &[RED, GREEN], nopng::PlayCount::ONCE))
+        .expect("encode must succeed");
+    assert_eq!(
+        chunk_types(&bytes),
+        vec!["IHDR", "acTL", "fcTL", "IDAT", "fcTL", "fdAT", "IEND"]
+    );
+}
+
+#[test]
+fn encode_preserves_play_count_variants() {
+    let finite = |n: u32| nopng::PlayCount::Finite(NonZeroU32::new(n).expect("n is non-zero"));
+    for (play_count, expected) in [
+        (nopng::PlayCount::Infinite, nopng::PlayCount::Infinite),
+        (nopng::PlayCount::ONCE, nopng::PlayCount::ONCE),
+        (finite(7), finite(7)),
+    ] {
+        let bytes = nopng::encode_animation(&animation(2, &[RED], play_count))
+            .expect("encode must succeed");
+        assert_eq!(decode_rgba8(&bytes).0.play_count, expected);
+    }
+}
+
+#[test]
+fn encode_preserves_delays() {
+    let mut original = animation(2, &[RED, GREEN], nopng::PlayCount::Infinite);
+    original.frames[0].delay = nopng::Delay {
+        num: 5,
+        den: NonZeroU16::new(100).expect("100 is non-zero"),
+    };
+    original.frames[1].delay = nopng::Delay {
+        num: 3,
+        den: NonZeroU16::new(1000).expect("1000 is non-zero"),
+    };
+    let bytes = nopng::encode_animation(&original).expect("encode must succeed");
+    assert_eq!(decode_rgba8(&bytes).1, vec![(5, 100), (3, 1000)]);
+}
+
+#[test]
+fn encode_rejects_an_empty_animation() {
+    let empty = animation(2, &[], nopng::PlayCount::Infinite);
+    let error = nopng::encode_animation(&empty).expect_err("an animation needs a frame");
+    assert!(
+        matches!(error, nopng::Error::InvalidData(_)),
+        "got {error:?}"
+    );
+}
+
+#[test]
+fn encode_rejects_a_wrongly_sized_frame_buffer() {
+    let mut broken = animation(2, &[RED], nopng::PlayCount::Infinite);
+    broken.frames[0].pixels.truncate(4);
+    let error = nopng::encode_animation(&broken).expect_err("a short buffer must be rejected");
+    assert!(
+        matches!(error, nopng::Error::InvalidData(_)),
+        "got {error:?}"
+    );
+}
+
+/// The four-character types of every chunk in a PNG stream, in order.
+fn chunk_types(bytes: &[u8]) -> Vec<String> {
+    let mut offset = 8;
+    let mut types = Vec::new();
+    while offset + 12 <= bytes.len() {
+        let len = u32::from_be_bytes(
+            bytes[offset..offset + 4]
+                .try_into()
+                .expect("4 bytes from a 4-byte slice"),
+        ) as usize;
+        let kind =
+            core::str::from_utf8(&bytes[offset + 4..offset + 8]).expect("chunk types are ASCII");
+        types.push(kind.to_string());
+        offset += 12 + len;
+    }
+    types
+}
