@@ -12,8 +12,6 @@
 
 use std::cell::Cell;
 
-use nopng::{Animation, Delay, Error, Frame, PixelFormat, PlayCount};
-
 /// Case budget for the round-trip properties.
 const CASES: usize = 150;
 /// Smaller budget for the byte-fuzzing property, whose cases are heavier.
@@ -47,18 +45,22 @@ fn sample_frame_count(ctx: &mut noprop::TestCaseContext) -> usize {
 /// A play count covering both `acTL` encodings: `0` for loop-forever and a
 /// non-zero count for `Finite`. Boundaries include the values either side of
 /// `u16::MAX` and the `u32` maximum.
-fn sample_play_count(ctx: &mut noprop::TestCaseContext) -> PlayCount {
+fn sample_play_count(ctx: &mut noprop::TestCaseContext) -> nopng::PlayCount {
     noprop::sample_with_boundaries(
         ctx,
         &[
-            PlayCount::Infinite,
-            PlayCount::ONCE,
-            PlayCount::Finite(core::num::NonZeroU32::new(u32::MAX).expect("u32::MAX is non-zero")),
+            nopng::PlayCount::Infinite,
+            nopng::PlayCount::ONCE,
+            nopng::PlayCount::Finite(
+                core::num::NonZeroU32::new(u32::MAX).expect("u32::MAX is non-zero"),
+            ),
         ],
         noprop::Ratio::one_nth(2),
         |ctx| match noprop::sample_u32_in(ctx, 1..=1_000) {
-            1 => PlayCount::ONCE,
-            n => PlayCount::Finite(core::num::NonZeroU32::new(n).expect("range starts at 1")),
+            1 => nopng::PlayCount::ONCE,
+            n => {
+                nopng::PlayCount::Finite(core::num::NonZeroU32::new(n).expect("range starts at 1"))
+            }
         },
     )
 }
@@ -89,7 +91,7 @@ fn sample_delay_den(ctx: &mut noprop::TestCaseContext) -> core::num::NonZeroU16 
 /// would promote (a colour type with `tRNS`) are deliberately absent: the
 /// encoder never writes `tRNS` for them, so they would not exercise anything
 /// the plain variants miss.
-fn sample_format(ctx: &mut noprop::TestCaseContext) -> PixelFormat {
+fn sample_format(ctx: &mut noprop::TestCaseContext) -> nopng::PixelFormat {
     let choice = noprop::sample_weighted_index(ctx, &[1, 1, 1, 1, 1, 1, 1, 1, 2, 2]);
     let palette = |entries: usize| -> Vec<u8> {
         (0..entries)
@@ -100,19 +102,19 @@ fn sample_format(ctx: &mut noprop::TestCaseContext) -> PixelFormat {
             .collect()
     };
     match choice {
-        0 => PixelFormat::Rgba8,
-        1 => PixelFormat::Rgba16Be,
-        2 => PixelFormat::Rgb8,
-        3 => PixelFormat::Rgb16Be,
-        4 => PixelFormat::Gray8,
-        5 => PixelFormat::Gray16Be,
-        6 => PixelFormat::GrayAlpha8,
-        7 => PixelFormat::GrayAlpha16Be,
-        8 => PixelFormat::Indexed4 {
+        0 => nopng::PixelFormat::Rgba8,
+        1 => nopng::PixelFormat::Rgba16Be,
+        2 => nopng::PixelFormat::Rgb8,
+        3 => nopng::PixelFormat::Rgb16Be,
+        4 => nopng::PixelFormat::Gray8,
+        5 => nopng::PixelFormat::Gray16Be,
+        6 => nopng::PixelFormat::GrayAlpha8,
+        7 => nopng::PixelFormat::GrayAlpha16Be,
+        8 => nopng::PixelFormat::Indexed4 {
             palette: palette(16),
             trns: Some(vec![128; 16]),
         },
-        _ => PixelFormat::Indexed8 {
+        _ => nopng::PixelFormat::Indexed8 {
             palette: palette(256),
             trns: None,
         },
@@ -124,13 +126,17 @@ fn sample_format(ctx: &mut noprop::TestCaseContext) -> PixelFormat {
 /// Every value in the buffer is legal for the format: indexed samples are drawn
 /// from the palette's index range and low-bit grayscale from its value range,
 /// so the encoder never has to reject the input.
-fn sample_pixels(ctx: &mut noprop::TestCaseContext, format: &PixelFormat, canvas: u32) -> Vec<u8> {
+fn sample_pixels(
+    ctx: &mut noprop::TestCaseContext,
+    format: &nopng::PixelFormat,
+    canvas: u32,
+) -> Vec<u8> {
     let len = format.data_len(canvas, canvas);
     match format {
         // The encoder rejects an index outside the palette, so draw each one
         // from the palette's own range instead of all 256 byte values. With a
         // full 16-entry palette this is the whole 0..=15 range.
-        PixelFormat::Indexed4 { palette, .. } => {
+        nopng::PixelFormat::Indexed4 { palette, .. } => {
             let entries = (palette.len() / 3) as u8;
             (0..len)
                 .map(|_| noprop::sample_u8_in(ctx, 0..entries))
@@ -148,28 +154,28 @@ fn sample_pixels(ctx: &mut noprop::TestCaseContext, format: &PixelFormat, canvas
 /// Independent of the codec: the conversion is spelled out per format so the
 /// property does not simply call `reformat_pixels` and compare the codec with
 /// itself.
-fn expected_rgba16(format: &PixelFormat, pixels: &[u8]) -> Vec<u8> {
+fn expected_rgba16(format: &nopng::PixelFormat, pixels: &[u8]) -> Vec<u8> {
     // 8-bit samples are widened to 16 bits by replication, `v * 257`, which
     // maps 0 to 0 and 255 to 65535. Spelled out here so the expectation does
     // not call back into the crate's own widening helper.
     let widen = |sample: u8| u16::from(sample) * 257;
     match format {
-        PixelFormat::Rgba8 => pixels
+        nopng::PixelFormat::Rgba8 => pixels
             .as_chunks::<4>()
             .0
             .iter()
             .flat_map(|p| [p[0], p[1], p[2], p[3]])
             .flat_map(|byte| widen(byte).to_be_bytes())
             .collect(),
-        PixelFormat::Rgba16Be => pixels.to_vec(),
-        PixelFormat::Rgb8 => pixels
+        nopng::PixelFormat::Rgba16Be => pixels.to_vec(),
+        nopng::PixelFormat::Rgb8 => pixels
             .as_chunks::<3>()
             .0
             .iter()
             .flat_map(|p| [p[0], p[1], p[2], 255])
             .flat_map(|byte| widen(byte).to_be_bytes())
             .collect(),
-        PixelFormat::Rgb16Be => pixels
+        nopng::PixelFormat::Rgb16Be => pixels
             .as_chunks::<6>()
             .0
             .iter()
@@ -183,12 +189,12 @@ fn expected_rgba16(format: &PixelFormat, pixels: &[u8]) -> Vec<u8> {
             })
             .flat_map(u16::to_be_bytes)
             .collect(),
-        PixelFormat::Gray8 => pixels
+        nopng::PixelFormat::Gray8 => pixels
             .iter()
             .flat_map(|&g| [widen(g), widen(g), widen(g), u16::MAX])
             .flat_map(u16::to_be_bytes)
             .collect(),
-        PixelFormat::Gray16Be => pixels
+        nopng::PixelFormat::Gray16Be => pixels
             .as_chunks::<2>()
             .0
             .iter()
@@ -196,14 +202,14 @@ fn expected_rgba16(format: &PixelFormat, pixels: &[u8]) -> Vec<u8> {
             .flat_map(|g| [g, g, g, u16::MAX])
             .flat_map(u16::to_be_bytes)
             .collect(),
-        PixelFormat::GrayAlpha8 => pixels
+        nopng::PixelFormat::GrayAlpha8 => pixels
             .as_chunks::<2>()
             .0
             .iter()
             .flat_map(|p| [p[0], p[0], p[0], p[1]])
             .flat_map(|byte| widen(byte).to_be_bytes())
             .collect(),
-        PixelFormat::GrayAlpha16Be => pixels
+        nopng::PixelFormat::GrayAlpha16Be => pixels
             .as_chunks::<4>()
             .0
             .iter()
@@ -214,10 +220,10 @@ fn expected_rgba16(format: &PixelFormat, pixels: &[u8]) -> Vec<u8> {
             })
             .flat_map(u16::to_be_bytes)
             .collect(),
-        PixelFormat::Indexed4 { palette, trns } => {
+        nopng::PixelFormat::Indexed4 { palette, trns } => {
             palette_samples(pixels, palette, trns.as_deref(), widen)
         }
-        PixelFormat::Indexed8 { palette, trns } => {
+        nopng::PixelFormat::Indexed8 { palette, trns } => {
             palette_samples(pixels, palette, trns.as_deref(), widen)
         }
         other => panic!("sample_format never produces {other:?}"),
@@ -250,21 +256,21 @@ fn palette_samples(
         .collect()
 }
 
-/// Builds an [`Animation`] from a canvas size, format, play count, and delays.
+/// Builds an [`nopng::Animation`] from a canvas size, format, play count, and delays.
 fn animation(
     canvas: u32,
-    format: PixelFormat,
-    play_count: PlayCount,
-    frames: Vec<(Vec<u8>, Delay)>,
-) -> Animation {
-    Animation {
+    format: nopng::PixelFormat,
+    play_count: nopng::PlayCount,
+    frames: Vec<(Vec<u8>, nopng::Delay)>,
+) -> nopng::Animation {
+    nopng::Animation {
         width: core::num::NonZeroU32::new(canvas).expect("canvas is 1..=MAX_CANVAS"),
         height: core::num::NonZeroU32::new(canvas).expect("canvas is 1..=MAX_CANVAS"),
         pixel_format: format,
         play_count,
         frames: frames
             .into_iter()
-            .map(|(pixels, delay)| Frame { pixels, delay })
+            .map(|(pixels, delay)| nopng::Frame { pixels, delay })
             .collect(),
     }
 }
@@ -298,7 +304,7 @@ fn roundtrip_random_animation() -> noprop::TestResult {
         let mut delays = Vec::with_capacity(frame_count);
         for _ in 0..frame_count {
             let pixels = sample_pixels(ctx, &format, canvas);
-            let delay = Delay {
+            let delay = nopng::Delay {
                 num: sample_delay_num(ctx),
                 den: sample_delay_den(ctx),
             };
@@ -330,15 +336,15 @@ fn roundtrip_random_animation() -> noprop::TestResult {
             multi_frame_cases.set(multi_frame_cases.get() + 1);
         }
         match play_count {
-            PlayCount::Infinite => infinite_play_cases.set(infinite_play_cases.get() + 1),
-            PlayCount::Finite(_) => finite_play_cases.set(finite_play_cases.get() + 1),
+            nopng::PlayCount::Infinite => infinite_play_cases.set(infinite_play_cases.get() + 1),
+            nopng::PlayCount::Finite(_) => finite_play_cases.set(finite_play_cases.get() + 1),
         }
         if delays.iter().any(|delay| delay.den.get() == 1) {
             den_one_cases.set(den_one_cases.get() + 1);
         }
         if matches!(
             format,
-            PixelFormat::Indexed4 { .. } | PixelFormat::Indexed8 { .. }
+            nopng::PixelFormat::Indexed4 { .. } | nopng::PixelFormat::Indexed8 { .. }
         ) {
             indexed_cases.set(indexed_cases.get() + 1);
         }
@@ -388,19 +394,19 @@ fn roundtrip_preserves_every_play_count() -> noprop::TestResult {
             |ctx| noprop::sample_u32_in(ctx, 1..=u32::MAX),
         );
         let play_count = if noprop::sample_bool(ctx) {
-            PlayCount::Infinite
+            nopng::PlayCount::Infinite
         } else {
-            PlayCount::Finite(core::num::NonZeroU32::new(value).expect("range starts at 1"))
+            nopng::PlayCount::Finite(core::num::NonZeroU32::new(value).expect("range starts at 1"))
         };
 
         let pixels = noprop::sample_bytes_vec(ctx, 4);
         let original = animation(
             1,
-            PixelFormat::Rgba8,
+            nopng::PixelFormat::Rgba8,
             play_count,
             vec![(
                 pixels,
-                Delay {
+                nopng::Delay {
                     num: 1,
                     den: core::num::NonZeroU16::new(10).expect("10 is non-zero"),
                 },
@@ -427,7 +433,7 @@ fn encode_rejects_bad_input_as_invalid_data() -> noprop::TestResult {
         let canvas = sample_canvas(ctx);
         let format = sample_format(ctx);
         let play_count = sample_play_count(ctx);
-        let delay = Delay {
+        let delay = nopng::Delay {
             num: sample_delay_num(ctx),
             den: sample_delay_den(ctx),
         };
@@ -439,7 +445,7 @@ fn encode_rejects_bad_input_as_invalid_data() -> noprop::TestResult {
                 let error = nopng::encode_animation(&original)
                     .expect_err("an animation needs at least one frame");
                 assert!(
-                    matches!(error, Error::InvalidData(_)),
+                    matches!(error, nopng::Error::InvalidData(_)),
                     "empty frame list gave {error:?}"
                 );
                 empty_cases.set(empty_cases.get() + 1);
@@ -460,7 +466,7 @@ fn encode_rejects_bad_input_as_invalid_data() -> noprop::TestResult {
                     let error = nopng::encode_animation(&original)
                         .expect_err("a short pixel buffer must be rejected");
                     assert!(
-                        matches!(error, Error::InvalidData(_)),
+                        matches!(error, nopng::Error::InvalidData(_)),
                         "short pixel buffer gave {error:?}"
                     );
                 } else {
@@ -469,7 +475,7 @@ fn encode_rejects_bad_input_as_invalid_data() -> noprop::TestResult {
                     let error = nopng::encode_animation(&original)
                         .expect_err("a long pixel buffer must be rejected");
                     assert!(
-                        matches!(error, Error::InvalidData(_)),
+                        matches!(error, nopng::Error::InvalidData(_)),
                         "long pixel buffer gave {error:?}"
                     );
                 }
@@ -483,7 +489,7 @@ fn encode_rejects_bad_input_as_invalid_data() -> noprop::TestResult {
                 let error = nopng::encode_animation(&original)
                     .expect_err("a long pixel buffer must be rejected");
                 assert!(
-                    matches!(error, Error::InvalidData(_)),
+                    matches!(error, nopng::Error::InvalidData(_)),
                     "long pixel buffer gave {error:?}"
                 );
                 long_buffer_cases.set(long_buffer_cases.get() + 1);
@@ -539,11 +545,11 @@ fn roundtrip_is_stable_after_one_transcode() -> noprop::TestResult {
         let canvas = sample_canvas(ctx);
         let format = sample_format(ctx);
         let frame_count = sample_frame_count(ctx);
-        let frames: Vec<(Vec<u8>, Delay)> = (0..frame_count)
+        let frames: Vec<(Vec<u8>, nopng::Delay)> = (0..frame_count)
             .map(|_| {
                 (
                     sample_pixels(ctx, &format, canvas),
-                    Delay {
+                    nopng::Delay {
                         num: sample_delay_num(ctx),
                         den: sample_delay_den(ctx),
                     },
