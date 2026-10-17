@@ -9,6 +9,7 @@
 
 use alloc::format;
 use alloc::vec::Vec;
+use core::num::NonZeroUsize;
 
 use crate::chunk::{AcTlChunk, FcTlChunk, FdAtChunk};
 use crate::crc;
@@ -94,6 +95,12 @@ pub(crate) struct RawAnimation {
     /// is animation frame 0. If false, `IDAT` is a poster image that is not
     /// part of the animation and every frame comes from `fdAT`.
     pub(crate) idat_is_frame_zero: bool,
+    /// The number of frames, always equal to `frames.len()`.
+    ///
+    /// Carrying it as a [`NonZeroUsize`] makes the "an APNG has at least one
+    /// frame" invariant part of the type, so consumers never have to handle (or
+    /// panic on) the empty case.
+    pub(crate) frame_count: NonZeroUsize,
     pub(crate) frames: Vec<RawFrame>,
 }
 
@@ -240,9 +247,10 @@ pub(crate) fn parse_animation(bytes: &[u8]) -> Result<RawAnimation> {
     if idat_data.is_empty() {
         return Err(Error::InvalidData("missing IDAT chunk".into()));
     }
-    if frames.is_empty() {
-        return Err(Error::InvalidData("missing fcTL chunk".into()));
-    }
+    let frame_count = match NonZeroUsize::new(frames.len()) {
+        Some(frame_count) => frame_count,
+        None => return Err(Error::InvalidData("missing fcTL chunk".into())),
+    };
 
     // Frame 0 is the IDAT stream when the first fcTL appeared before IDAT; in
     // that case the first `frames` entry carries no fdAT data. Otherwise every
@@ -269,6 +277,7 @@ pub(crate) fn parse_animation(bytes: &[u8]) -> Result<RawAnimation> {
         num_frames: actl.num_frames,
         num_plays: actl.num_plays,
         idat_is_frame_zero,
+        frame_count,
         frames,
     })
 }
@@ -364,6 +373,7 @@ mod tests {
         assert_eq!(animation.num_frames, 2);
         assert_eq!(animation.num_plays, 0);
         assert!(animation.idat_is_frame_zero);
+        assert_eq!(animation.frame_count.get(), 2);
         assert_eq!(animation.frames.len(), 2);
         assert!(animation.frames[0].zlib_stream.is_empty());
         assert!(!animation.frames[1].zlib_stream.is_empty());

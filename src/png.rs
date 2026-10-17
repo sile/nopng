@@ -1,5 +1,6 @@
 use alloc::vec::Vec;
 use core::num::NonZeroU32;
+use core::num::NonZeroUsize;
 
 use crate::chunk::{IdatChunk, IendChunk, IhdrChunk, PlteChunk, TrnsChunk};
 use crate::pixel_reformat::{reformat, validate_format_and_data};
@@ -169,7 +170,7 @@ pub struct Inspection {
     pub pixel_format: PixelFormat,
     /// Number of buffers decoding returns: `1` for a static image, the number
     /// of frames present in the file for an animation.
-    pub frames: NonZeroU32,
+    pub frames: NonZeroUsize,
     /// Whether the file carries animation chunks (`acTL`).
     ///
     /// An animation may hold a single frame, so this is independent of
@@ -191,8 +192,8 @@ impl Inspection {
         self.width
             .get()
             .checked_mul(self.height.get())
+            .map(|pixels| usize::try_from(pixels).expect("usize is at least 32 bits"))
             .and_then(|pixels| pixels.checked_mul(self.frames.get()))
-            .map(|pixels| pixels as usize)
             .and_then(|pixels| pixels.checked_mul(self.pixel_format.bytes_per_pixel()))
             .expect("decoded pixel buffer size overflow")
     }
@@ -219,10 +220,7 @@ pub fn inspect(bytes: &[u8]) -> Result<Inspection> {
             width: non_zero_dimension(animation.header.width),
             height: non_zero_dimension(animation.header.height),
             pixel_format: PixelFormat::Rgba16Be,
-            frames: NonZeroU32::new(
-                u32::try_from(animation.frames.len()).expect("more frames than u32::MAX"),
-            )
-            .expect("an APNG has at least one frame"),
+            frames: animation.frame_count,
             animated: true,
             interlaced: animation.header.interlace_method == 1,
         });
@@ -233,7 +231,7 @@ pub fn inspect(bytes: &[u8]) -> Result<Inspection> {
         width: spec.width,
         height: spec.height,
         pixel_format: spec.pixel_format,
-        frames: NonZeroU32::MIN,
+        frames: NonZeroUsize::MIN,
         animated: false,
         interlaced: header.interlace_method == 1,
     })
