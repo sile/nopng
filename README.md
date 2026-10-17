@@ -24,8 +24,8 @@ Examples
 
 ```rust
 let spec = nopng::ImageSpec {
-    width: core::num::NonZeroU32::new(2).unwrap(),
-    height: core::num::NonZeroU32::new(2).unwrap(),
+    width: core::num::NonZeroU32::new(2).expect("2 is non-zero"),
+    height: core::num::NonZeroU32::new(2).expect("2 is non-zero"),
     pixel_format: nopng::PixelFormat::Rgba8,
 };
 let pixels = vec![255u8; spec.data_len()]; // white, fully opaque
@@ -49,8 +49,8 @@ let palette = vec![
     255, 255, 0, // index 3: yellow
 ];
 let spec = nopng::ImageSpec {
-    width: core::num::NonZeroU32::new(2).unwrap(),
-    height: core::num::NonZeroU32::new(2).unwrap(),
+    width: core::num::NonZeroU32::new(2).expect("2 is non-zero"),
+    height: core::num::NonZeroU32::new(2).expect("2 is non-zero"),
     pixel_format: nopng::PixelFormat::Indexed8 { palette, trns: None },
 };
 let indices = vec![0, 1, 2, 3]; // one index per pixel
