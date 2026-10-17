@@ -148,12 +148,3 @@ Decoded frames are composited, so each one is a complete image that can be
 displayed without consulting its neighbours. The output format is always
 `Rgba16Be` — the lossless common denominator for mixing frames — so use
 `reformat_pixels` to narrow it if needed.
-
-Limitations
------------
-
-- APNG encoding cannot emit a sub-rectangle frame or a dispose/blend
-  operation other than `NONE`/`SOURCE`, so an animation encoded by this
-  crate always decodes back to exactly the frames it was given.
-- `reformat_pixels` cannot convert **to** an indexed format; it returns
-  `Error::Unsupported`.
