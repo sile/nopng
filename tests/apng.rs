@@ -841,6 +841,95 @@ fn encode_rejects_a_wrongly_sized_frame_buffer() {
     );
 }
 
+#[test]
+fn inspect_reports_an_animation_and_its_frame_count() {
+    let bytes = nopng::encode_animation(&animation(
+        3,
+        &[RED, GREEN, BLUE],
+        nopng::PlayCount::Infinite,
+    ))
+    .expect("encode must succeed");
+    let info = nopng::inspect(&bytes).expect("inspect must succeed");
+    assert_eq!(info.width.get(), 3);
+    assert_eq!(info.height.get(), 3);
+    assert_eq!(info.frames.get(), 3);
+    assert!(info.animated);
+    assert!(!info.interlaced);
+    // Decoding an animation always yields `Rgba16Be` buffers.
+    assert_eq!(info.pixel_format, nopng::PixelFormat::Rgba16Be);
+    assert_eq!(info.decoded_len(), 3 * 3 * 3 * 8);
+}
+
+#[test]
+fn inspect_reports_a_single_frame_as_animated() {
+    // `animated` follows the presence of `acTL`, not the frame count: an APNG
+    // with one frame is still an animation.
+    let bytes = nopng::encode_animation(&animation(2, &[RED], nopng::PlayCount::ONCE))
+        .expect("encode must succeed");
+    let info = nopng::inspect(&bytes).expect("inspect must succeed");
+    assert_eq!(info.frames.get(), 1);
+    assert!(info.animated);
+    assert_eq!(info.pixel_format, nopng::PixelFormat::Rgba16Be);
+}
+
+#[test]
+fn inspect_reports_a_static_image() {
+    let spec = image_spec(2, 3, nopng::PixelFormat::Rgba8);
+    let bytes = nopng::encode_image(&spec, &vec![0u8; spec.data_len()]).expect("infallible");
+    let info = nopng::inspect(&bytes).expect("inspect must succeed");
+    assert_eq!(info.width.get(), 2);
+    assert_eq!(info.height.get(), 3);
+    assert_eq!(info.frames.get(), 1);
+    assert!(!info.animated);
+    assert!(!info.interlaced);
+    assert_eq!(info.pixel_format, nopng::PixelFormat::Rgba8);
+    assert_eq!(info.decoded_len(), spec.data_len());
+}
+
+#[test]
+fn inspect_rejects_a_broken_apng_instead_of_reporting_it_static() {
+    // The stream carries `acTL` but its `fcTL` is renamed to an unrelated
+    // chunk, so it is not a valid APNG. It must be an error rather than being
+    // silently reported as a static image.
+    let mut bytes = nopng::encode_animation(&animation(2, &[RED], nopng::PlayCount::ONCE))
+        .expect("encode must succeed");
+    let at = find_chunk(&bytes, b"fcTL").expect("the encoder writes an fcTL");
+    let len = u32::from_be_bytes(
+        bytes[at - 4..at]
+            .try_into()
+            .expect("4 bytes from a 4-byte slice"),
+    ) as usize;
+    bytes[at..at + 4].copy_from_slice(b"teSt");
+    let crc_pos = at + 4 + len;
+    let new_crc = crc(&bytes[at..crc_pos]);
+    bytes[crc_pos..crc_pos + 4].copy_from_slice(&new_crc.to_be_bytes());
+
+    let error = nopng::inspect(&bytes).expect_err("a broken APNG must be rejected");
+    assert!(
+        matches!(error, nopng::Error::InvalidData(_)),
+        "got {error:?}"
+    );
+}
+
+/// Offset of the 4-byte type field of the first chunk of `kind`.
+///
+/// The chunk length occupies the four bytes before that offset.
+fn find_chunk(bytes: &[u8], kind: &[u8; 4]) -> Option<usize> {
+    let mut offset = 8;
+    while offset + 12 <= bytes.len() {
+        let len = u32::from_be_bytes(
+            bytes[offset..offset + 4]
+                .try_into()
+                .expect("4 bytes from a 4-byte slice"),
+        ) as usize;
+        if &bytes[offset + 4..offset + 8] == kind {
+            return Some(offset + 4);
+        }
+        offset += 12 + len;
+    }
+    None
+}
+
 /// The four-character types of every chunk in a PNG stream, in order.
 fn chunk_types(bytes: &[u8]) -> Vec<String> {
     let mut offset = 8;

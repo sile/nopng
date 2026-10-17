@@ -57,7 +57,7 @@ pub(crate) const ADAM7_PASSES: [Adam7Pass; 7] = [
 ///
 /// `ImageSpec` serves two roles:
 ///
-/// - **Decode output** — returned by [`decode_image`] and [`inspect_image`]
+/// - **Decode output** — returned by [`decode_image`]
 ///   to describe the decoded (or to-be-decoded) pixel data.
 /// - **Encode input** — passed to [`encode_image`] to specify how pixel data
 ///   should be written into a PNG stream.
@@ -149,15 +149,94 @@ fn non_zero_dimension(value: u32) -> NonZeroU32 {
     NonZeroU32::new(value).expect("bug: png_decode accepted a zero dimension")
 }
 
-/// Reads PNG metadata from the PNG signature, `IHDR`, `PLTE`, and `tRNS`
-/// chunks, stopping at the first `IDAT`.
+/// What inspecting a PNG reveals about the buffers decoding it will produce.
+///
+/// This is the return type of [`inspect`]. It answers the questions a caller
+/// needs before committing to a decode: how large the output is, whether the
+/// file is animated, and whether its scanlines are interlaced.
+///
+/// `width`, `height`, and `pixel_format` describe each buffer [`decode_image`]
+/// or [`decode_animation`](crate::decode_animation) returns. For an animation that format is always
+/// [`PixelFormat::Rgba16Be`], the format compositing happens in; for a static
+/// image it is the PNG's native format.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Inspection {
+    /// Width in pixels of each decoded buffer.
+    pub width: NonZeroU32,
+    /// Height in pixels of each decoded buffer.
+    pub height: NonZeroU32,
+    /// Pixel format of each decoded buffer.
+    pub pixel_format: PixelFormat,
+    /// Number of buffers decoding returns: `1` for a static image, the number
+    /// of frames present in the file for an animation.
+    pub frames: NonZeroU32,
+    /// Whether the file carries animation chunks (`acTL`).
+    ///
+    /// An animation may hold a single frame, so this is independent of
+    /// [`frames`](Inspection::frames).
+    pub animated: bool,
+    /// Whether the scanlines are Adam7-interlaced.
+    ///
+    /// Interlacing changes only how samples are arranged on the wire; the
+    /// decoded buffers have the same size either way.
+    pub interlaced: bool,
+}
+
+impl Inspection {
+    /// Total byte length of the pixel data decoding returns.
+    ///
+    /// This is the size of the single buffer [`decode_image`] returns, or the
+    /// sum over every frame [`decode_animation`](crate::decode_animation) returns.
+    pub fn decoded_len(&self) -> usize {
+        self.width
+            .get()
+            .checked_mul(self.height.get())
+            .and_then(|pixels| pixels.checked_mul(self.frames.get()))
+            .map(|pixels| pixels as usize)
+            .and_then(|pixels| pixels.checked_mul(self.pixel_format.bytes_per_pixel()))
+            .expect("decoded pixel buffer size overflow")
+    }
+}
+
+/// Reads PNG metadata from the PNG signature, `IHDR`, `PLTE`, `tRNS`, and
+/// `acTL` chunks, stopping at the first `IDAT`.
 ///
 /// The returned `pixel_format` reflects the decode output format:
 /// - Indexed images include the embedded palette and tRNS.
 /// - Grayscale/RGB with tRNS are promoted to alpha variants.
-pub fn inspect_image(bytes: &[u8]) -> Result<ImageSpec> {
-    let (header, ancillary) = crate::png_decode::parse_png_metadata(bytes)?;
-    Ok(ImageSpec::from_header_and_ancillary(&header, &ancillary))
+/// - Animations always report [`PixelFormat::Rgba16Be`].
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidData`] if the stream is not a well-formed PNG, and
+/// also if it carries animation chunks that do not parse as an APNG: a file
+/// with `acTL` is never reported as a static image.
+pub fn inspect(bytes: &[u8]) -> Result<Inspection> {
+    let (header, ancillary, has_animation_chunks) = crate::png_decode::parse_png_metadata(bytes)?;
+    if has_animation_chunks {
+        let animation = crate::apng::parse_animation(bytes)?;
+        return Ok(Inspection {
+            width: non_zero_dimension(animation.header.width),
+            height: non_zero_dimension(animation.header.height),
+            pixel_format: PixelFormat::Rgba16Be,
+            frames: NonZeroU32::new(
+                u32::try_from(animation.frames.len()).expect("more frames than u32::MAX"),
+            )
+            .expect("an APNG has at least one frame"),
+            animated: true,
+            interlaced: animation.header.interlace_method == 1,
+        });
+    }
+
+    let spec = ImageSpec::from_header_and_ancillary(&header, &ancillary);
+    Ok(Inspection {
+        width: spec.width,
+        height: spec.height,
+        pixel_format: spec.pixel_format,
+        frames: NonZeroU32::MIN,
+        animated: false,
+        interlaced: header.interlace_method == 1,
+    })
 }
 
 /// Determines the decode output `PixelFormat` from header + ancillary chunks.
@@ -409,7 +488,7 @@ mod tests {
 
     use super::{
         Error, IhdrChunk, ImageSpec, PNG_SIGNATURE, PixelFormat, decode_image, encode_image,
-        inspect_image,
+        inspect,
     };
     use crate::pixel_reformat::reformat;
 
@@ -531,7 +610,7 @@ mod tests {
 
     #[test]
     fn image_spec_rejects_truncated_ihdr() {
-        let error = inspect_image(&PNG_SIGNATURE).expect_err("infallible");
+        let error = inspect(&PNG_SIGNATURE).expect_err("infallible");
         assert_matches!(error, Error::InvalidData(message) if message.contains("IHDR"));
     }
 

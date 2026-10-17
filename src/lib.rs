@@ -4,7 +4,7 @@
 
 //! `nopng` — a minimal, `no_std` PNG encoder/decoder.
 //!
-//! See [`decode_image`], [`encode_image`], [`inspect_image`], and [`ImageSpec`] for the main API.
+//! See [`decode_image`], [`encode_image`], [`inspect`], and [`ImageSpec`] for the main API.
 //!
 //! # Examples
 //!
@@ -68,8 +68,8 @@
 //! #     },
 //! #     &[128],
 //! # )?;
-//! let spec = nopng::inspect_image(&png_bytes)?;
-//! println!("{}x{}", spec.width, spec.height);
+//! let info = nopng::inspect(&png_bytes)?;
+//! println!("{}x{}", info.width, info.height);
 //! # Ok::<(), nopng::Error>(())
 //! ```
 //!
@@ -84,7 +84,7 @@
 //! #     },
 //! #     &[0, 64, 128, 255],
 //! # )?;
-//! let info = nopng::inspect_image(&png_bytes)?;
+//! let info = nopng::inspect(&png_bytes)?;
 //! let (spec, pixels) = nopng::decode_image(&png_bytes)?;
 //!
 //! // Only reformat when the native format isn't already RGBA8.
@@ -93,7 +93,7 @@
 //! } else {
 //!     nopng::reformat_pixels(&spec.pixel_format, &pixels, &nopng::PixelFormat::Rgba8)?
 //! };
-//! assert_eq!(rgba.len(), info.width.get() as usize * info.height.get() as usize * 4);
+//! assert_eq!(rgba.len(), spec.width.get() as usize * spec.height.get() as usize * 4);
 //! # Ok::<(), nopng::Error>(())
 //! ```
 //!
@@ -150,9 +150,10 @@ mod zlib;
 pub use animation::{Animation, Delay, Frame, PlayCount, decode_animation, encode_animation};
 pub use png::Error;
 pub use png::ImageSpec;
+pub use png::Inspection;
 pub use png::decode_image;
 pub use png::encode_image;
 pub use png::encode_image_interlaced;
-pub use png::inspect_image;
+pub use png::inspect;
 pub use png::reformat_pixels;
 pub use png_types::PixelFormat;
