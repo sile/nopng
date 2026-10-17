@@ -23,7 +23,11 @@ Examples
 ### Encode a 2x2 RGBA8 image
 
 ```rust
-let spec = nopng::ImageSpec::new(2, 2, nopng::PixelFormat::Rgba8);
+let spec = nopng::ImageSpec {
+    width: core::num::NonZeroU32::new(2).unwrap(),
+    height: core::num::NonZeroU32::new(2).unwrap(),
+    pixel_format: nopng::PixelFormat::Rgba8,
+};
 let pixels = vec![255u8; spec.data_len()]; // white, fully opaque
 let png_bytes = nopng::encode_image(&spec, &pixels)?;
 ```
@@ -44,10 +48,11 @@ let palette = vec![
     0, 0, 255,   // index 2: blue
     255, 255, 0, // index 3: yellow
 ];
-let spec = nopng::ImageSpec::new(
-    2, 2,
-    nopng::PixelFormat::Indexed8 { palette, trns: None },
-);
+let spec = nopng::ImageSpec {
+    width: core::num::NonZeroU32::new(2).unwrap(),
+    height: core::num::NonZeroU32::new(2).unwrap(),
+    pixel_format: nopng::PixelFormat::Indexed8 { palette, trns: None },
+};
 let indices = vec![0, 1, 2, 3]; // one index per pixel
 let png_bytes = nopng::encode_image(&spec, &indices)?;
 ```

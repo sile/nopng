@@ -69,7 +69,11 @@ impl CoreError for Error {
 ///
 /// ```
 /// # let png_bytes = nopng::encode_image(
-/// #     &nopng::ImageSpec::new(1, 1, nopng::PixelFormat::Rgba8),
+/// #     &nopng::ImageSpec {
+/// #         width: core::num::NonZeroU32::new(1).unwrap(),
+/// #         height: core::num::NonZeroU32::new(1).unwrap(),
+/// #         pixel_format: nopng::PixelFormat::Rgba8,
+/// #     },
 /// #     &[255, 0, 0, 255],
 /// # )?;
 /// let (spec, pixels) = nopng::decode_image(&png_bytes)?;

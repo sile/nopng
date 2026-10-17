@@ -11,7 +11,11 @@
 //! Encode a 2x2 RGBA8 image:
 //!
 //! ```
-//! let spec = nopng::ImageSpec::new(2, 2, nopng::PixelFormat::Rgba8);
+//! let spec = nopng::ImageSpec {
+//!     width: core::num::NonZeroU32::new(2).unwrap(),
+//!     height: core::num::NonZeroU32::new(2).unwrap(),
+//!     pixel_format: nopng::PixelFormat::Rgba8,
+//! };
 //! let pixels = vec![255u8; spec.data_len()]; // white, fully opaque
 //! let png_bytes = nopng::encode_image(&spec, &pixels)?;
 //! # Ok::<(), nopng::Error>(())
@@ -21,7 +25,11 @@
 //!
 //! ```
 //! # let png_bytes = nopng::encode_image(
-//! #     &nopng::ImageSpec::new(1, 1, nopng::PixelFormat::Rgba8),
+//! #     &nopng::ImageSpec {
+//! #         width: core::num::NonZeroU32::new(1).unwrap(),
+//! #         height: core::num::NonZeroU32::new(1).unwrap(),
+//! #         pixel_format: nopng::PixelFormat::Rgba8,
+//! #     },
 //! #     &[255, 0, 0, 255],
 //! # )?;
 //! let (spec, pixels) = nopng::decode_image(&png_bytes)?;
@@ -33,7 +41,11 @@
 //!
 //! ```
 //! # let png_bytes = nopng::encode_image(
-//! #     &nopng::ImageSpec::new(1, 1, nopng::PixelFormat::Rgba8),
+//! #     &nopng::ImageSpec {
+//! #         width: core::num::NonZeroU32::new(1).unwrap(),
+//! #         height: core::num::NonZeroU32::new(1).unwrap(),
+//! #         pixel_format: nopng::PixelFormat::Rgba8,
+//! #     },
 //! #     &[255, 0, 0, 255],
 //! # )?;
 //! let (spec, pixels) = nopng::decode_image(&png_bytes)?;
@@ -49,7 +61,11 @@
 //!
 //! ```
 //! # let png_bytes = nopng::encode_image(
-//! #     &nopng::ImageSpec::new(1, 1, nopng::PixelFormat::Gray8),
+//! #     &nopng::ImageSpec {
+//! #         width: core::num::NonZeroU32::new(1).unwrap(),
+//! #         height: core::num::NonZeroU32::new(1).unwrap(),
+//! #         pixel_format: nopng::PixelFormat::Gray8,
+//! #     },
 //! #     &[128],
 //! # )?;
 //! let spec = nopng::inspect_image(&png_bytes)?;
@@ -61,7 +77,11 @@
 //!
 //! ```
 //! # let png_bytes = nopng::encode_image(
-//! #     &nopng::ImageSpec::new(2, 2, nopng::PixelFormat::Gray8),
+//! #     &nopng::ImageSpec {
+//! #         width: core::num::NonZeroU32::new(2).unwrap(),
+//! #         height: core::num::NonZeroU32::new(2).unwrap(),
+//! #         pixel_format: nopng::PixelFormat::Gray8,
+//! #     },
 //! #     &[0, 64, 128, 255],
 //! # )?;
 //! let info = nopng::inspect_image(&png_bytes)?;
@@ -73,7 +93,7 @@
 //! } else {
 //!     nopng::reformat_pixels(&spec.pixel_format, &pixels, &nopng::PixelFormat::Rgba8)?
 //! };
-//! assert_eq!(rgba.len(), info.width as usize * info.height as usize * 4);
+//! assert_eq!(rgba.len(), info.width.get() as usize * info.height.get() as usize * 4);
 //! # Ok::<(), nopng::Error>(())
 //! ```
 //!
@@ -86,10 +106,11 @@
 //!     0, 0, 255,   // index 2: blue
 //!     255, 255, 0, // index 3: yellow
 //! ];
-//! let spec = nopng::ImageSpec::new(
-//!     2, 2,
-//!     nopng::PixelFormat::Indexed8 { palette, trns: None },
-//! );
+//! let spec = nopng::ImageSpec {
+//!     width: core::num::NonZeroU32::new(2).unwrap(),
+//!     height: core::num::NonZeroU32::new(2).unwrap(),
+//!     pixel_format: nopng::PixelFormat::Indexed8 { palette, trns: None },
+//! };
 //! let indices = vec![0, 1, 2, 3]; // one index per pixel
 //! let png_bytes = nopng::encode_image(&spec, &indices)?;
 //! # Ok::<(), nopng::Error>(())
@@ -131,6 +152,7 @@ pub use png::Error;
 pub use png::ImageSpec;
 pub use png::decode_image;
 pub use png::encode_image;
+pub use png::encode_image_interlaced;
 pub use png::inspect_image;
 pub use png::reformat_pixels;
 pub use png_types::PixelFormat;

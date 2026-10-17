@@ -14,6 +14,20 @@
 
 use core::num::{NonZeroU16, NonZeroU32};
 
+/// Narrows a literal dimension to the `NonZeroU32` the public types require.
+fn nz(value: u32) -> NonZeroU32 {
+    NonZeroU32::new(value).expect("test dimensions are non-zero")
+}
+
+/// Builds an [`nopng::ImageSpec`] from literal dimensions.
+fn image_spec(width: u32, height: u32, pixel_format: nopng::PixelFormat) -> nopng::ImageSpec {
+    nopng::ImageSpec {
+        width: nz(width),
+        height: nz(height),
+        pixel_format,
+    }
+}
+
 /// `acTL`/`fcTL` dispose operation values, mirroring the spec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Dispose {
@@ -132,9 +146,13 @@ fn ihdr_of(png: &[u8]) -> [u8; 13] {
 
 /// Encodes one rectangle of RGBA8 pixels to a PNG and returns its zlib stream.
 fn zlib_for_rect(frame: &FrameSpec, interlaced: bool) -> Vec<u8> {
-    let mut spec = nopng::ImageSpec::new(frame.width, frame.height, nopng::PixelFormat::Rgba8);
-    spec.interlaced = interlaced;
-    let png = nopng::encode_image(&spec, &frame.pixels).expect("infallible");
+    let spec = image_spec(frame.width, frame.height, nopng::PixelFormat::Rgba8);
+    let png = if interlaced {
+        nopng::encode_image_interlaced(&spec, &frame.pixels)
+    } else {
+        nopng::encode_image(&spec, &frame.pixels)
+    }
+    .expect("infallible");
     idat_of(&png)
 }
 
@@ -175,10 +193,13 @@ fn build_apng_interlaced(
     // IHDR: reuse the static encoder's header for the first frame so the bit
     // depth and color type are guaranteed consistent with the pixel data.
     let first = &frames[0];
-    let mut probe_spec =
-        nopng::ImageSpec::new(first.width, first.height, nopng::PixelFormat::Rgba8);
-    probe_spec.interlaced = interlaced;
-    let probe = nopng::encode_image(&probe_spec, &first.pixels).expect("infallible");
+    let probe_spec = image_spec(first.width, first.height, nopng::PixelFormat::Rgba8);
+    let probe = if interlaced {
+        nopng::encode_image_interlaced(&probe_spec, &first.pixels)
+    } else {
+        nopng::encode_image(&probe_spec, &first.pixels)
+    }
+    .expect("infallible");
     let mut ihdr = ihdr_of(&probe);
     ihdr[0..4].copy_from_slice(&canvas.to_be_bytes());
     ihdr[4..8].copy_from_slice(&canvas.to_be_bytes());
@@ -279,8 +300,8 @@ fn decodes_idat_as_frame_zero() {
     let bytes = build_apng(2, &[first, second], 0, false, None);
 
     let (animation, delays) = decode_rgba8(&bytes);
-    assert_eq!(animation.width, 2);
-    assert_eq!(animation.height, 2);
+    assert_eq!(animation.width.get(), 2);
+    assert_eq!(animation.height.get(), 2);
     assert_eq!(animation.play_count, nopng::PlayCount::Infinite);
     assert_eq!(animation.frames.len(), 2);
     assert_eq!(animation.frames[0].pixels, solid(2, RED));
@@ -649,11 +670,8 @@ fn decodes_interlaced_frames() {
 
 #[test]
 fn static_png_is_not_an_animation() {
-    let png = nopng::encode_image(
-        &nopng::ImageSpec::new(2, 2, nopng::PixelFormat::Rgba8),
-        &solid(2, RED),
-    )
-    .expect("infallible");
+    let png = nopng::encode_image(&image_spec(2, 2, nopng::PixelFormat::Rgba8), &solid(2, RED))
+        .expect("infallible");
     let error = nopng::decode_animation(&png).expect_err("a static PNG has no acTL");
     assert!(
         matches!(error, nopng::Error::InvalidData(_)),
@@ -741,8 +759,8 @@ fn animation(canvas: u32, colors: &[[u8; 4]], play_count: nopng::PlayCount) -> n
         })
         .collect();
     nopng::Animation {
-        width: canvas,
-        height: canvas,
+        width: nz(canvas),
+        height: nz(canvas),
         pixel_format: nopng::PixelFormat::Rgba8,
         play_count,
         frames,
@@ -755,8 +773,8 @@ fn encodes_a_round_trippable_animation() {
     let bytes = nopng::encode_animation(&original).expect("encode must succeed");
 
     let (decoded, delays) = decode_rgba8(&bytes);
-    assert_eq!(decoded.width, 2);
-    assert_eq!(decoded.height, 2);
+    assert_eq!(decoded.width.get(), 2);
+    assert_eq!(decoded.height.get(), 2);
     assert_eq!(decoded.play_count, nopng::PlayCount::Infinite);
     assert_eq!(decoded.frames.len(), 3);
     assert_eq!(decoded.frames[0].pixels, solid(2, RED));

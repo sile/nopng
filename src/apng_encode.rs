@@ -30,15 +30,9 @@ pub(crate) fn encode_animation(animation: &Animation) -> Result<Vec<u8>> {
             "an animation must have at least one frame".into(),
         ));
     }
-    if animation.width == 0 || animation.height == 0 {
-        return Err(Error::InvalidData(
-            "animation dimensions must be non-zero".into(),
-        ));
-    }
-
     let expected_len = animation
         .pixel_format
-        .data_len(animation.width, animation.height);
+        .data_len(animation.width.get(), animation.height.get());
     for (index, frame) in animation.frames.iter().enumerate() {
         if frame.pixels.len() != expected_len {
             return Err(Error::InvalidData(
@@ -56,8 +50,8 @@ pub(crate) fn encode_animation(animation: &Animation) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&PNG_SIGNATURE);
     IhdrChunk {
-        width: animation.width,
-        height: animation.height,
+        width: animation.width.get(),
+        height: animation.height.get(),
         bit_depth: first.bit_depth,
         color_type: first.color_type,
         interlace_method: 0,
@@ -110,8 +104,8 @@ pub(crate) fn encode_animation(animation: &Animation) -> Result<Vec<u8>> {
 fn frame_control_chunk(animation: &Animation, frame: &Frame, sequence: u32) -> FcTlChunk {
     FcTlChunk {
         sequence_number: sequence,
-        width: animation.width,
-        height: animation.height,
+        width: animation.width.get(),
+        height: animation.height.get(),
         x_offset: 0,
         y_offset: 0,
         delay_num: frame.delay.num,
@@ -125,8 +119,8 @@ fn frame_control_chunk(animation: &Animation, frame: &Frame, sequence: u32) -> F
 /// fields that describe them.
 fn encode_frame(animation: &Animation, pixels: &[u8]) -> Result<EncodedImage> {
     EncodedImage::from_format_and_data(
-        animation.width,
-        animation.height,
+        animation.width.get(),
+        animation.height.get(),
         &animation.pixel_format,
         pixels,
         false,
