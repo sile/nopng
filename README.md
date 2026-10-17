@@ -25,63 +25,95 @@ Examples
 ### Encode a 2x2 RGBA8 image
 
 ```rust
-let spec = nopng::ImageSpec {
-    width: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
-    height: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
-    pixel_format: nopng::PixelFormat::Rgba8,
-};
-let pixels = vec![255u8; spec.data_len()]; // white, fully opaque
-let png_bytes = nopng::encode_image(&spec, &pixels)?;
-# Ok::<(), nopng::Error>(())
+fn main() -> Result<(), nopng::Error> {
+    let spec = nopng::ImageSpec {
+        width: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
+        height: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
+        pixel_format: nopng::PixelFormat::Rgba8,
+    };
+    let pixels = vec![255u8; spec.data_len()]; // white, fully opaque
+    let png_bytes = nopng::encode_image(&spec, &pixels)?;
+    Ok(())
+}
 ```
 
 ### Decode and reformat to RGBA8
 
 ```rust
-let spec = nopng::ImageSpec {
-    width: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
-    height: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
-    pixel_format: nopng::PixelFormat::Rgba8,
-};
-let pixels = vec![255u8; spec.data_len()];
-let png_bytes = nopng::encode_image(&spec, &pixels)?;
+fn main() -> Result<(), nopng::Error> {
+    let spec = nopng::ImageSpec {
+        width: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
+        height: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
+        pixel_format: nopng::PixelFormat::Rgba8,
+    };
+    let pixels = vec![255u8; spec.data_len()];
+    let png_bytes = nopng::encode_image(&spec, &pixels)?;
 
-let (spec, pixels) = nopng::decode_image(&png_bytes)?;
-let rgba = nopng::reformat_pixels(&spec.pixel_format, &pixels, &nopng::PixelFormat::Rgba8)?;
-# Ok::<(), nopng::Error>(())
+    let (spec, pixels) = nopng::decode_image(&png_bytes)?;
+    let rgba = nopng::reformat_pixels(&spec.pixel_format, &pixels, &nopng::PixelFormat::Rgba8)?;
+    Ok(())
+}
 ```
 
 ### Encode an indexed (palette) image
 
 ```rust
-let palette = vec![
-    255, 0, 0,   // index 0: red
-    0, 255, 0,   // index 1: green
-    0, 0, 255,   // index 2: blue
-    255, 255, 0, // index 3: yellow
-];
-let spec = nopng::ImageSpec {
-    width: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
-    height: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
-    pixel_format: nopng::PixelFormat::Indexed8 { palette, trns: None },
-};
-let indices = vec![0, 1, 2, 3]; // one index per pixel
-let png_bytes = nopng::encode_image(&spec, &indices)?;
-# Ok::<(), nopng::Error>(())
+fn main() -> Result<(), nopng::Error> {
+    let palette = vec![
+        255, 0, 0,   // index 0: red
+        0, 255, 0,   // index 1: green
+        0, 0, 255,   // index 2: blue
+        255, 255, 0, // index 3: yellow
+    ];
+    let spec = nopng::ImageSpec {
+        width: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
+        height: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
+        pixel_format: nopng::PixelFormat::Indexed8 { palette, trns: None },
+    };
+    let indices = vec![0, 1, 2, 3]; // one index per pixel
+    let png_bytes = nopng::encode_image(&spec, &indices)?;
+    Ok(())
+}
 ```
 
 ### Convert pixel data between formats
 
 ```rust
-// RGB8 pixels (3 bytes each)
-let rgb = vec![255, 0, 0, 0, 255, 0]; // red, green
-let rgba = nopng::reformat_pixels(
-    &nopng::PixelFormat::Rgb8,
-    &rgb,
-    &nopng::PixelFormat::Rgba8,
-)?;
-assert_eq!(rgba, &[255, 0, 0, 255, 0, 255, 0, 255]);
-# Ok::<(), nopng::Error>(())
+fn main() -> Result<(), nopng::Error> {
+    // RGB8 pixels (3 bytes each)
+    let rgb = vec![255, 0, 0, 0, 255, 0]; // red, green
+    let rgba = nopng::reformat_pixels(
+        &nopng::PixelFormat::Rgb8,
+        &rgb,
+        &nopng::PixelFormat::Rgba8,
+    )?;
+    assert_eq!(rgba, &[255, 0, 0, 255, 0, 255, 0, 255]);
+    Ok(())
+}
+```
+
+### Encode an animation and decode it again
+
+```rust
+fn main() -> Result<(), nopng::Error> {
+    let animation = nopng::Animation {
+        width: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
+        height: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
+        pixel_format: nopng::PixelFormat::Rgba8,
+        play_count: nopng::PlayCount::Infinite,
+        frames: vec![nopng::Frame {
+            pixels: vec![255, 0, 0, 255].repeat(4),
+            delay: nopng::Delay {
+                num: 1,
+                den: std::num::NonZeroU16::new(10).expect("10 is non-zero"),
+            },
+        }],
+    };
+    let bytes = nopng::encode_animation(&animation)?;
+    let decoded = nopng::decode_animation(&bytes)?;
+    assert_eq!(decoded.frames.len(), 1);
+    Ok(())
+}
 ```
 
 Supported Formats
@@ -97,46 +129,25 @@ Supported Formats
 
 Adam7 interlace is supported for both encoding and decoding.
 
-### APNG
+APNG
+----
 
-An animation is a canvas size, a pixel format, a play count, and a list of
-full-canvas frames. The `acTL`/`fcTL`/`fdAT` bookkeeping (frame rectangles,
-dispose/blend operations, sequence numbers) is handled internally and is
-not exposed.
+nopng can read and write animated PNGs. An animation is a canvas size, a
+pixel format, a play count, and a list of full-canvas frames. The
+`acTL`/`fcTL`/`fdAT` bookkeeping (frame rectangles, dispose/blend
+operations, sequence numbers) is handled internally and is not exposed.
 
-| Property                    | Decode                         | Encode                          |
-|-----------------------------|--------------------------------|---------------------------------|
-| Pixel format                | always `Rgba16Be` (composited) | any format from the table above |
-| Frame size                  | expanded to the full canvas    | always the full canvas          |
-| Dispose / blend operations  | applied, not exposed           | always `NONE` / `SOURCE`        |
-| Interlace                   | read from the file             | always non-interlaced           |
+| Property                   | Decode                         | Encode                          |
+|----------------------------|--------------------------------|---------------------------------|
+| Pixel format               | always `Rgba16Be` (composited) | any format from the table above |
+| Frame size                 | expanded to the full canvas    | always the full canvas          |
+| Dispose / blend operations | applied, not exposed           | always `NONE` / `SOURCE`        |
+| Interlace                  | read from the file             | always non-interlaced           |
 
 Decoded frames are composited, so each one is a complete image that can be
 displayed without consulting its neighbours. The output format is always
 `Rgba16Be` — the lossless common denominator for mixing frames — so use
 `reformat_pixels` to narrow it if needed.
-
-### Encode an animation and decode it again
-
-```rust
-let animation = nopng::Animation {
-    width: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
-    height: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
-    pixel_format: nopng::PixelFormat::Rgba8,
-    play_count: nopng::PlayCount::Infinite,
-    frames: vec![nopng::Frame {
-        pixels: vec![255, 0, 0, 255].repeat(4),
-        delay: nopng::Delay {
-            num: 1,
-            den: std::num::NonZeroU16::new(10).expect("10 is non-zero"),
-        },
-    }],
-};
-let bytes = nopng::encode_animation(&animation)?;
-let decoded = nopng::decode_animation(&bytes)?;
-assert_eq!(decoded.frames.len(), 1);
-# Ok::<(), nopng::Error>(())
-```
 
 Limitations
 -----------
