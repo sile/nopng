@@ -12,8 +12,7 @@ use core::num::{NonZeroU16, NonZeroU32};
 
 use crate::apng::parse_animation;
 use crate::apng_decode::composite;
-use crate::pixel_reformat::reformat;
-use crate::png_types::{Error, PixelFormat, Result};
+use crate::png_types::{PixelFormat, Result};
 
 /// The presentation duration of a frame, in seconds: `num / den`.
 ///
@@ -96,40 +95,36 @@ pub struct Animation {
 
 /// Decodes APNG bytes into an [`Animation`].
 ///
-/// Every frame is returned composited onto the full canvas and converted to
-/// `format`, so a frame can be displayed without consulting the others. The
-/// result is therefore directly usable: every [`Frame::pixels`] holds one
-/// complete `width` by `height` image in `format`, so no frame needs to be
-/// combined with its neighbours before display. Read the frames in the order
-/// they appear, starting from a transparent black canvas.
+/// Every frame is returned composited onto the full canvas, so a frame can be
+/// displayed without consulting the others. The result is therefore directly
+/// usable: every [`Frame::pixels`] holds one complete `width` by `height` image,
+/// so no frame needs to be combined with its neighbours before display. Read the
+/// frames in the order they appear, starting from a transparent black canvas.
+///
+/// The frames are always in [`PixelFormat::Rgba16Be`] — the crate's lossless
+/// common denominator. Compositing mixes colors from frames that may use
+/// different formats, so the result is materialized in a single format rather
+/// than in any one source's. Convert it with
+/// [`reformat_pixels`](crate::reformat_pixels) if you want something narrower
+/// such as `Rgba8`.
 ///
 /// The decoded frames reflect the source's dispose and blend operations; the
 /// operations themselves are not exposed because they have already been applied.
 ///
 /// # Errors
 ///
-/// Returns [`Error::InvalidData`] if `bytes` is not a valid APNG — for example
-/// if it has no `acTL` chunk (a static PNG), if chunk ordering or sequence
-/// numbers are broken, if a frame is not fully inside the canvas, or if the
-/// first frame does not cover the canvas.
-///
-/// Returns [`Error::Unsupported`] if `format` is an indexed format, since
-/// compositing works in a full-color space and cannot target a palette.
-pub fn decode_animation(bytes: &[u8], format: PixelFormat) -> Result<Animation> {
-    if format.is_indexed() {
-        return Err(Error::Unsupported(
-            "compositing cannot target an indexed pixel format".into(),
-        ));
-    }
-
+/// Returns [`Error::InvalidData`](crate::Error::InvalidData) if `bytes` is not a
+/// valid APNG — for example if it has no `acTL` chunk (a static PNG), if chunk
+/// ordering or sequence numbers are broken, if a frame is not fully inside the
+/// canvas, or if the first frame does not cover the canvas.
+pub fn decode_animation(bytes: &[u8]) -> Result<Animation> {
     let raw = parse_animation(bytes)?;
     let composited = composite(raw)?;
 
     let mut frames = Vec::with_capacity(composited.frames.len());
     for frame in composited.frames {
-        let pixels = reformat(&PixelFormat::Rgba16Be, &frame.pixels, &format)?;
         frames.push(Frame {
-            pixels,
+            pixels: frame.pixels,
             delay: Delay {
                 num: frame.delay_num,
                 den: normalize_delay_den(frame.delay_den),
@@ -140,7 +135,7 @@ pub fn decode_animation(bytes: &[u8], format: PixelFormat) -> Result<Animation> 
     Ok(Animation {
         width: composited.width,
         height: composited.height,
-        pixel_format: format,
+        pixel_format: PixelFormat::Rgba16Be,
         play_count: play_count_from_u32(composited.num_plays),
         frames,
     })

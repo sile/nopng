@@ -234,10 +234,23 @@ fn build_apng_interlaced(
     out
 }
 
-/// Decodes to RGBA8 and returns `(delay_pairs, play_count, frames)`.
+/// Decodes and narrows every frame to RGBA8, returning the animation plus the
+/// `(num, den)` delay pairs.
+///
+/// `decode_animation` always yields `Rgba16Be`; this helper calls
+/// [`nopng::reformat_pixels`] per frame, mirroring what a caller who wants a
+/// narrower format would do.
 fn decode_rgba8(bytes: &[u8]) -> (nopng::Animation, Vec<(u16, u16)>) {
-    let animation =
-        nopng::decode_animation(bytes, nopng::PixelFormat::Rgba8).expect("decode must succeed");
+    let mut animation = nopng::decode_animation(bytes).expect("decode must succeed");
+    for frame in &mut animation.frames {
+        frame.pixels = nopng::reformat_pixels(
+            &nopng::PixelFormat::Rgba16Be,
+            &frame.pixels,
+            &nopng::PixelFormat::Rgba8,
+        )
+        .expect("Rgba16Be -> Rgba8 is lossless enough");
+    }
+    animation.pixel_format = nopng::PixelFormat::Rgba8;
     let delays = animation
         .frames
         .iter()
@@ -554,33 +567,33 @@ fn wrong_declared_frame_count_is_tolerated() {
 }
 
 #[test]
-fn decodes_to_gray8() {
+fn decoded_frames_are_always_rgba16be() {
+    // `decode_animation` takes no format argument: every frame comes back in the
+    // compositing format, and narrowing is the caller's job.
     let first = FrameSpec::full(2, solid(2, RED), Dispose::None, Blend::Source);
     let bytes = build_apng(2, &[first], 0, false, None);
-    let animation =
-        nopng::decode_animation(&bytes, nopng::PixelFormat::Gray8).expect("decode must succeed");
-    assert_eq!(animation.pixel_format, nopng::PixelFormat::Gray8);
-    assert_eq!(animation.frames[0].pixels.len(), 4);
-    // Pure red -> the crate's luma weights give 76.
-    assert_eq!(animation.frames[0].pixels, vec![76, 76, 76, 76]);
+    let animation = nopng::decode_animation(&bytes).expect("decode must succeed");
+    assert_eq!(animation.pixel_format, nopng::PixelFormat::Rgba16Be);
+    assert_eq!(animation.frames[0].pixels.len(), 2 * 2 * 8);
 }
 
 #[test]
-fn indexed_output_is_unsupported() {
+fn frames_can_be_narrowed_after_decoding() {
+    // The decoded Rgba16Be frames convert on demand; pure red at 8 bpc maps to
+    // red at 16 bpc and back, and to the crate's luma weight in gray.
     let first = FrameSpec::full(2, solid(2, RED), Dispose::None, Blend::Source);
     let bytes = build_apng(2, &[first], 0, false, None);
-    let error = nopng::decode_animation(
-        &bytes,
-        nopng::PixelFormat::Indexed8 {
-            palette: vec![0, 0, 0],
-            trns: None,
-        },
+    let animation = nopng::decode_animation(&bytes).expect("decode must succeed");
+
+    let gray = nopng::reformat_pixels(
+        &animation.pixel_format,
+        &animation.frames[0].pixels,
+        &nopng::PixelFormat::Gray8,
     )
-    .expect_err("indexed output must be rejected");
-    assert!(
-        matches!(error, nopng::Error::Unsupported(_)),
-        "got {error:?}"
-    );
+    .expect("Rgba16Be -> Gray8 is supported");
+    assert_eq!(gray.len(), 4);
+    // Pure red -> the crate's luma weights give 76.
+    assert_eq!(gray, vec![76, 76, 76, 76]);
 }
 
 #[test]
@@ -641,8 +654,7 @@ fn static_png_is_not_an_animation() {
         &solid(2, RED),
     )
     .expect("infallible");
-    let error = nopng::decode_animation(&png, nopng::PixelFormat::Rgba8)
-        .expect_err("a static PNG has no acTL");
+    let error = nopng::decode_animation(&png).expect_err("a static PNG has no acTL");
     assert!(
         matches!(error, nopng::Error::InvalidData(_)),
         "got {error:?}"
@@ -654,7 +666,7 @@ fn frame_larger_than_canvas_is_rejected() {
     // A 2x2 frame declared on a 1x1 canvas: the rectangle does not fit.
     let oversized = FrameSpec::full(2, solid(2, RED), Dispose::None, Blend::Source);
     let bytes = build_apng(1, &[oversized], 0, false, None);
-    let error = nopng::decode_animation(&bytes, nopng::PixelFormat::Rgba8)
+    let error = nopng::decode_animation(&bytes)
         .expect_err("a frame wider than the canvas must be rejected");
     assert!(
         matches!(error, nopng::Error::InvalidData(_)),
@@ -679,8 +691,8 @@ fn sub_rectangle_that_overflows_the_edge_is_rejected() {
         pixels: GREEN.to_vec(),
     };
     let bytes = build_apng(2, &[first, overflowing], 0, false, None);
-    let error = nopng::decode_animation(&bytes, nopng::PixelFormat::Rgba8)
-        .expect_err("a frame past the right edge must be rejected");
+    let error =
+        nopng::decode_animation(&bytes).expect_err("a frame past the right edge must be rejected");
     assert!(
         matches!(error, nopng::Error::InvalidData(_)),
         "got {error:?}"
@@ -691,7 +703,7 @@ fn sub_rectangle_that_overflows_the_edge_is_rejected() {
 fn first_frame_must_cover_the_canvas() {
     let first = FrameSpec::full(2, solid(2, RED), Dispose::None, Blend::Source);
     let bytes = build_apng(2, &[first], 0, false, None);
-    assert!(nopng::decode_animation(&bytes, nopng::PixelFormat::Rgba8).is_ok());
+    assert!(nopng::decode_animation(&bytes).is_ok());
 
     // A 1x1 first frame on a 2x2 canvas is illegal.
     let sub = FrameSpec {
@@ -706,8 +718,8 @@ fn first_frame_must_cover_the_canvas() {
         pixels: RED.to_vec(),
     };
     let bytes = build_apng(2, &[sub], 0, false, None);
-    let error = nopng::decode_animation(&bytes, nopng::PixelFormat::Rgba8)
-        .expect_err("a sub-rectangle first frame must be rejected");
+    let error =
+        nopng::decode_animation(&bytes).expect_err("a sub-rectangle first frame must be rejected");
     assert!(
         matches!(error, nopng::Error::InvalidData(_)),
         "got {error:?}"

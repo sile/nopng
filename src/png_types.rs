@@ -216,19 +216,4 @@ impl PixelFormat {
             .and_then(|pixels| pixels.checked_mul(self.bytes_per_pixel()))
             .expect("pixel buffer size overflow")
     }
-
-    /// Whether this format is one of the palette-based indexed formats.
-    ///
-    /// An indexed pixel is a palette index rather than a color, so working with
-    /// indexed data requires a palette to interpret it. Operations that produce
-    /// colors directly — such as compositing — cannot target these formats.
-    pub fn is_indexed(&self) -> bool {
-        matches!(
-            self,
-            Self::Indexed1 { .. }
-                | Self::Indexed2 { .. }
-                | Self::Indexed4 { .. }
-                | Self::Indexed8 { .. }
-        )
-    }
 }
