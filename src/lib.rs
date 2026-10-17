@@ -115,6 +115,7 @@ mod adler32;
 mod animation;
 mod apng;
 mod apng_decode;
+mod apng_encode;
 mod chunk;
 mod crc;
 mod deflate;
@@ -125,7 +126,7 @@ mod png_encode;
 mod png_types;
 mod zlib;
 
-pub use animation::{Animation, Delay, Frame, PlayCount, decode_animation};
+pub use animation::{Animation, Delay, Frame, PlayCount, decode_animation, encode_animation};
 pub use png::Error;
 pub use png::ImageSpec;
 pub use png::decode_image;

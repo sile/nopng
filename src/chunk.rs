@@ -99,12 +99,6 @@ pub(crate) fn zlib_wrap(filtered_data: &[u8]) -> crate::png_types::Result<Vec<u8
     Ok(data)
 }
 
-// NOTE: the APNG chunk types below are parsed by `apng::parse_animation` but
-// not yet consumed by any encoder, so their serialization/parse helpers are
-// unreachable from the public API until the animation decode/encode changes
-// land. Remove these `allow`s then. (`expect` cannot be used: these helpers are
-// exercised by the unit tests, which would make the expectation unfulfilled.)
-
 /// The `acTL` chunk of an APNG: animation control data that must appear before
 /// the first `IDAT` chunk.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,8 +108,6 @@ pub(crate) struct AcTlChunk {
 }
 
 impl AcTlChunk {
-    // Used only by tests until `encode_animation` lands; remove then.
-    #[allow(dead_code)]
     pub(crate) fn append_to(&self, out: &mut Vec<u8>) {
         let mut data = [0u8; 8];
         data[0..4].copy_from_slice(&self.num_frames.to_be_bytes());
@@ -155,8 +147,6 @@ impl FcTlChunk {
     pub(crate) const BLEND_OP_SOURCE: u8 = 0;
     pub(crate) const BLEND_OP_OVER: u8 = 1;
 
-    // Used only by tests until `encode_animation` lands; remove then.
-    #[allow(dead_code)]
     pub(crate) fn append_to(&self, out: &mut Vec<u8>) {
         let mut data = [0u8; 26];
         data[0..4].copy_from_slice(&self.sequence_number.to_be_bytes());
@@ -199,8 +189,6 @@ pub(crate) struct FdAtChunk<'a> {
 }
 
 impl<'a> FdAtChunk<'a> {
-    // Used only by tests until `encode_animation` lands; remove then.
-    #[allow(dead_code)]
     pub(crate) fn append_to(&self, out: &mut Vec<u8>) {
         let mut data = Vec::with_capacity(4 + self.data.len());
         data.extend_from_slice(&self.sequence_number.to_be_bytes());

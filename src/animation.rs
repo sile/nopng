@@ -93,6 +93,21 @@ pub struct Animation {
     pub frames: Vec<Frame>,
 }
 
+/// Encodes an [`Animation`] into APNG bytes.
+///
+/// Every frame is written as a full-canvas image with `SOURCE` blend and `NONE`
+/// dispose, so [`decode_animation`] reconstructs the frames exactly. The
+/// resulting bytes are always non-interlaced.
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidData`](crate::Error::InvalidData) if `animation` has
+/// no frames, if its width or height is zero, or if a frame's pixel buffer is
+/// not the length [`PixelFormat::data_len`] prescribes for the canvas.
+pub fn encode_animation(animation: &Animation) -> Result<Vec<u8>> {
+    crate::apng_encode::encode_animation(animation)
+}
+
 /// Decodes APNG bytes into an [`Animation`].
 ///
 /// Every frame is returned composited onto the full canvas, so a frame can be
@@ -110,6 +125,32 @@ pub struct Animation {
 ///
 /// The decoded frames reflect the source's dispose and blend operations; the
 /// operations themselves are not exposed because they have already been applied.
+///
+/// # Examples
+///
+/// Encode an animation and decode it again:
+///
+/// ```
+/// let animation = nopng::Animation {
+///     width: 2,
+///     height: 2,
+///     pixel_format: nopng::PixelFormat::Rgba8,
+///     play_count: nopng::PlayCount::Infinite,
+///     frames: vec![
+///         nopng::Frame {
+///             pixels: vec![255, 0, 0, 255].repeat(4),
+///             delay: nopng::Delay {
+///                 num: 1,
+///                 den: core::num::NonZeroU16::new(10).expect("10 is non-zero"),
+///             },
+///         },
+///     ],
+/// };
+/// let bytes = nopng::encode_animation(&animation)?;
+/// let decoded = nopng::decode_animation(&bytes)?;
+/// assert_eq!(decoded.frames.len(), 1);
+/// # Ok::<(), nopng::Error>(())
+/// ```
 ///
 /// # Errors
 ///
