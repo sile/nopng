@@ -70,10 +70,18 @@ pub(crate) const ADAM7_PASSES: [Adam7Pass; 7] = [
 ///
 /// # Constraints
 ///
-/// `width` and `height` are [`NonZeroU32`](core::num::NonZeroU32), so a
-/// zero-sized image cannot be described by an `Image` at all. The
-/// `pixel_format` (and its embedded palette/trns for indexed variants) is
-/// validated at encode/decode time, as is the length of `pixels`.
+/// PNG has no representation for a zero-sized image, so `width` and `height`
+/// are [`NonZeroU32`](core::num::NonZeroU32) and the zero case is excluded by
+/// the type rather than reported as an error.
+///
+/// Everything else is checked when the `Image` is encoded or decoded. The
+/// fields are public and can be combined freely, so an `Image` you build
+/// yourself is not guaranteed to describe a valid PNG: `encode_image` rejects
+/// a `pixel_format` that PNG cannot represent, an indexed palette that is
+/// longer than 256 entries, and a `pixels` buffer whose length is not
+/// [`PixelFormat::data_len`](crate::PixelFormat::data_len)`(width, height)`,
+/// returning [`Error::InvalidData`]. `decode_image` likewise never produces
+/// such an `Image`.
 ///
 /// # Pixel data layout
 ///
