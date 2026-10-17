@@ -315,12 +315,14 @@ pub fn encode_image(spec: &ImageSpec, data: &[u8]) -> Result<Vec<u8>> {
 
 /// Encodes an image described by `spec` into PNG bytes using Adam7 interlacing.
 ///
-/// Interlacing lets a viewer show a low-resolution preview before the whole
-/// file has arrived. That only pays off for images large enough to be worth
-/// progressive loading; for small images it just makes the file slightly
-/// bigger, which is why [`encode_image`] does not interlace. Both functions
-/// produce byte-for-byte identical output for a given image when the decoded
-/// pixels are compared; only the on-the-wire arrangement differs.
+/// The PNG spec leaves the choice of interlace method to the encoder. Adam7
+/// splits the image into seven passes and feeds each as a separate scanline
+/// sequence to the compressor, which generally hurts compression: interlaced
+/// files are usually larger than the same image encoded with
+/// [`encode_image`].
+///
+/// The two encoders differ only in how the scanlines are arranged on the wire;
+/// decoding either returns the same pixels in the same buffer layout.
 ///
 /// The `data` buffer must contain pixel data in the format described by
 /// `spec.pixel_format`, with length matching [`ImageSpec::data_len()`].
