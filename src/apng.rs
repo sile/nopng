@@ -1,11 +1,5 @@
 //! APNG (Animated PNG) chunk-level parsing and validation.
 //!
-// NOTE: the walker below is not yet reachable from the public API; it is
-// consumed by `decode_animation` in the follow-up decode change. Remove this
-// `allow` then. (`expect` cannot be used: in the test build these items *are*
-// exercised, which would make the expectation unfulfilled.)
-#![allow(dead_code)]
-//!
 //! This module owns the wire format of the APNG chunks (`acTL`, `fcTL`, `fdAT`)
 //! and the walker that turns a PNG byte stream into the raw per-frame data the
 //! decoder composites. Nothing here is public: the frozen public API only
@@ -18,7 +12,7 @@ use alloc::vec::Vec;
 use crate::chunk::{AcTlChunk, FcTlChunk, FdAtChunk};
 use crate::crc;
 use crate::png::PNG_SIGNATURE;
-use crate::png_decode::{Cursor, PngHeader};
+use crate::png_decode::{AncillaryChunks, Cursor, PngHeader, apply_ancillary_chunk};
 use crate::png_types::{Error, Result};
 
 /// How the region covered by a frame is treated before the next frame is drawn.
@@ -83,6 +77,10 @@ pub(crate) struct RawFrame {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RawAnimation {
     pub(crate) header: PngHeader,
+    /// `PLTE`/`tRNS` metadata, shared by every frame. In an APNG these chunks
+    /// precede `IDAT`, so they apply to the whole animation rather than to one
+    /// frame.
+    pub(crate) ancillary: AncillaryChunks,
     /// `IDAT` payloads concatenated in order.
     pub(crate) idat_data: Vec<u8>,
     /// Declared `acTL` frame count, preserved verbatim. The spec permits it to
@@ -112,6 +110,7 @@ pub(crate) fn parse_animation(bytes: &[u8]) -> Result<RawAnimation> {
 
     let mut cursor = Cursor::new(&bytes[PNG_SIGNATURE.len()..]);
     let mut header: Option<PngHeader> = None;
+    let mut ancillary = AncillaryChunks::default();
     let mut idat_data = Vec::new();
     let mut actl: Option<AcTlChunk> = None;
     let mut frames: Vec<RawFrame> = Vec::new();
@@ -159,6 +158,16 @@ pub(crate) fn parse_animation(bytes: &[u8]) -> Result<RawAnimation> {
                     return Err(Error::InvalidData("acTL chunk after IDAT".into()));
                 }
                 actl = Some(AcTlChunk::parse(chunk_data)?);
+            }
+            b"PLTE" | b"tRNS" => {
+                let Some(header) = header.as_ref() else {
+                    return Err(Error::InvalidData("PLTE/tRNS chunk before IHDR".into()));
+                };
+                // In a valid APNG these precede IDAT and apply to every frame.
+                if seen_idat {
+                    return Err(Error::InvalidData("PLTE/tRNS chunk after IDAT".into()));
+                }
+                apply_ancillary_chunk(&chunk_type, chunk_data, header, &mut ancillary)?;
             }
             b"IDAT" => {
                 if header.is_none() {
@@ -226,6 +235,7 @@ pub(crate) fn parse_animation(bytes: &[u8]) -> Result<RawAnimation> {
     let Some(actl) = actl else {
         return Err(Error::InvalidData("missing acTL chunk".into()));
     };
+    ancillary.validate(&header)?;
     if idat_data.is_empty() {
         return Err(Error::InvalidData("missing IDAT chunk".into()));
     }
@@ -253,6 +263,7 @@ pub(crate) fn parse_animation(bytes: &[u8]) -> Result<RawAnimation> {
 
     Ok(RawAnimation {
         header,
+        ancillary,
         idat_data,
         num_frames: actl.num_frames,
         num_plays: actl.num_plays,
