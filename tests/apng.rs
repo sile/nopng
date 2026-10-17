@@ -548,7 +548,7 @@ fn zero_delay_denominator_normalizes_to_100() {
     );
     assert_eq!(
         animation.play_count,
-        nopng::PlayCount::Finite(NonZeroU32::new(1).expect("1 is non-zero"))
+        nopng::PlayCount::Finite(NonZeroU32::MIN)
     );
 }
 

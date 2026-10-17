@@ -82,8 +82,8 @@ pub(crate) const ADAM7_PASSES: [Adam7Pass; 7] = [
 /// ```
 /// # let png_bytes = nopng::encode_image(
 /// #     &nopng::ImageSpec {
-/// #         width: std::num::NonZeroU32::new(1).expect("1 is non-zero"),
-/// #         height: std::num::NonZeroU32::new(1).expect("1 is non-zero"),
+/// #         width: std::num::NonZeroU32::MIN,
+/// #         height: std::num::NonZeroU32::MIN,
 /// #         pixel_format: nopng::PixelFormat::Rgba8,
 /// #     },
 /// #     &[255, 0, 0, 255],
@@ -240,8 +240,8 @@ fn pixel_format_from_header(
 /// ```
 /// # let png_bytes = nopng::encode_image(
 /// #     &nopng::ImageSpec {
-/// #         width: std::num::NonZeroU32::new(1).expect("1 is non-zero"),
-/// #         height: std::num::NonZeroU32::new(1).expect("1 is non-zero"),
+/// #         width: std::num::NonZeroU32::MIN,
+/// #         height: std::num::NonZeroU32::MIN,
 /// #         pixel_format: nopng::PixelFormat::Gray8,
 /// #     },
 /// #     &[128],
@@ -284,8 +284,8 @@ pub fn decode_image(bytes: &[u8]) -> Result<(ImageSpec, Vec<u8>)> {
 /// ```
 /// # let png_bytes = nopng::encode_image(
 /// #     &nopng::ImageSpec {
-/// #         width: std::num::NonZeroU32::new(1).expect("1 is non-zero"),
-/// #         height: std::num::NonZeroU32::new(1).expect("1 is non-zero"),
+/// #         width: std::num::NonZeroU32::MIN,
+/// #         height: std::num::NonZeroU32::MIN,
 /// #         pixel_format: nopng::PixelFormat::Gray8,
 /// #     },
 /// #     &[128],
@@ -416,7 +416,7 @@ mod tests {
         let data = vec![255, 0, 0, 255, 0, 255, 0, 128];
         let spec = ImageSpec {
             width: NonZeroU32::new(2).expect("non-zero"),
-            height: NonZeroU32::new(1).expect("non-zero"),
+            height: NonZeroU32::MIN,
             pixel_format: PixelFormat::Rgba8,
         };
         let bytes = encode_image(&spec, &data).expect("infallible");
@@ -439,7 +439,7 @@ mod tests {
         let trns = vec![255, 128, 255, 64];
         let spec = ImageSpec {
             width: NonZeroU32::new(4).expect("non-zero"),
-            height: NonZeroU32::new(1).expect("non-zero"),
+            height: NonZeroU32::MIN,
             pixel_format: PixelFormat::Indexed2 {
                 palette: palette.clone(),
                 trns: Some(trns.clone()),
@@ -466,7 +466,7 @@ mod tests {
         let data = [255u8, 0, 0, 0, 255, 0];
         let spec = ImageSpec {
             width: NonZeroU32::new(2).expect("non-zero"),
-            height: NonZeroU32::new(1).expect("non-zero"),
+            height: NonZeroU32::MIN,
             pixel_format: PixelFormat::Rgb8,
         };
         let bytes = encode_image(&spec, &data).expect("infallible");
@@ -485,7 +485,7 @@ mod tests {
         let data = vec![0, 1, 2, 3];
         let spec = ImageSpec {
             width: NonZeroU32::new(2).expect("non-zero"),
-            height: NonZeroU32::new(1).expect("non-zero"),
+            height: NonZeroU32::MIN,
             pixel_format: PixelFormat::Rgba8,
         };
         let error = encode_image(&spec, &data).expect_err("mismatched buffer must fail");
@@ -499,7 +499,7 @@ mod tests {
         let data = vec![0, 4];
         let spec = ImageSpec {
             width: NonZeroU32::new(2).expect("non-zero"),
-            height: NonZeroU32::new(1).expect("non-zero"),
+            height: NonZeroU32::MIN,
             pixel_format: PixelFormat::Indexed2 {
                 palette: vec![0, 0, 0, 255, 255, 255],
                 trns: None,
@@ -518,7 +518,7 @@ mod tests {
             .collect();
         let spec = ImageSpec {
             width: NonZeroU32::new(2).expect("non-zero"),
-            height: NonZeroU32::new(1).expect("non-zero"),
+            height: NonZeroU32::MIN,
             pixel_format: PixelFormat::Rgba16Be,
         };
         let bytes = encode_image(&spec, &data).expect("infallible");
@@ -537,8 +537,8 @@ mod tests {
     fn roundtrip_1x1_rgba() {
         let data = vec![42, 128, 200, 255];
         let spec = ImageSpec {
-            width: NonZeroU32::new(1).expect("non-zero"),
-            height: NonZeroU32::new(1).expect("non-zero"),
+            width: NonZeroU32::MIN,
+            height: NonZeroU32::MIN,
             pixel_format: PixelFormat::Rgba8,
         };
         let bytes = encode_image(&spec, &data).expect("infallible");
@@ -557,7 +557,7 @@ mod tests {
         let data = vec![0, 255, 128, 64, 255, 128, 50, 200, 200, 100];
         let spec = ImageSpec {
             width: NonZeroU32::new(5).expect("non-zero"),
-            height: NonZeroU32::new(1).expect("non-zero"),
+            height: NonZeroU32::MIN,
             pixel_format: PixelFormat::GrayAlpha8,
         };
         let bytes = encode_image(&spec, &data).expect("infallible");
