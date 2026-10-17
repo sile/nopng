@@ -33,14 +33,16 @@ fn decodes_grayscale_png() {
 
 #[test]
 fn reads_image_spec_from_ihdr() {
-    let spec =
-        nopng::inspect_image(include_bytes!("data/gray16_interlaced.png")).expect("infallible");
-    assert_eq!(spec.width.get(), 5);
-    assert_eq!(spec.height.get(), 4);
+    let info = nopng::inspect(include_bytes!("data/gray16_interlaced.png")).expect("infallible");
+    assert_eq!(info.width.get(), 5);
+    assert_eq!(info.height.get(), 4);
     assert_matches!(
-        spec.pixel_format,
+        info.pixel_format,
         nopng::PixelFormat::Gray16Be | nopng::PixelFormat::GrayAlpha16Be
     );
+    assert_eq!(info.frames.get(), 1);
+    assert!(!info.animated);
+    assert!(info.interlaced);
 }
 
 #[test]

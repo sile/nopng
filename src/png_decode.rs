@@ -266,7 +266,11 @@ pub(crate) fn decode_png(
 }
 
 /// Parses PNG header and metadata chunks (IHDR, PLTE, tRNS), stopping at IDAT.
-pub(crate) fn parse_png_metadata(bytes: &[u8]) -> Result<(PngHeader, AncillaryChunks)> {
+///
+/// `has_animation_chunks` reports whether an `acTL` chunk appeared before the
+/// first `IDAT`. It is informational only: this function does not validate the
+/// animation chunks beyond their CRC.
+pub(crate) fn parse_png_metadata(bytes: &[u8]) -> Result<(PngHeader, AncillaryChunks, bool)> {
     if bytes.len() < PNG_SIGNATURE.len() || bytes[..PNG_SIGNATURE.len()] != PNG_SIGNATURE {
         return Err(Error::InvalidData("invalid PNG signature".into()));
     }
@@ -274,6 +278,7 @@ pub(crate) fn parse_png_metadata(bytes: &[u8]) -> Result<(PngHeader, AncillaryCh
     let mut cursor = Cursor::new(&bytes[PNG_SIGNATURE.len()..]);
     let mut header = None;
     let mut ancillary = AncillaryChunks::default();
+    let mut has_animation_chunks = false;
 
     while cursor.remaining() > 0 {
         let length = cursor.read_u32()? as usize;
@@ -316,13 +321,14 @@ pub(crate) fn parse_png_metadata(bytes: &[u8]) -> Result<(PngHeader, AncillaryCh
                 };
                 ancillary.set_transparency(parse_transparency(chunk_data, &header, &ancillary)?)?;
             }
+            b"acTL" => has_animation_chunks = true,
             b"IDAT" | b"IEND" => break,
             _ => {}
         }
     }
 
     let header = header.ok_or_else(|| Error::InvalidData("missing IHDR chunk".into()))?;
-    Ok((header, ancillary))
+    Ok((header, ancillary, has_animation_chunks))
 }
 
 fn parse_png(bytes: &[u8]) -> Result<(PngHeader, AncillaryChunks, Vec<u8>)> {
