@@ -158,3 +158,9 @@ pub use png::encode_image_interlaced;
 pub use png::inspect;
 pub use png::reformat_pixels;
 pub use png_types::PixelFormat;
+
+/// Compiles the code examples in `README.md` as doctests so they cannot drift
+/// away from the API.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

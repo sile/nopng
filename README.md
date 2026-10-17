@@ -15,6 +15,8 @@ Features
 - `no_std` (`alloc` only)
 - Decode: all color types (grayscale, truecolor, indexed, with/without alpha, 1–16 bit), Adam7 interlace
 - Encode: all color types, Adam7 interlace
+- Animated PNG (APNG): decode to full-canvas composited frames, encode full-canvas frames
+- `inspect` for reading dimensions, format, frame count, and interlace before decoding
 - `reformat_pixels` for pixel format conversion without a full encode/decode round-trip
 
 Examples
@@ -30,13 +32,23 @@ let spec = nopng::ImageSpec {
 };
 let pixels = vec![255u8; spec.data_len()]; // white, fully opaque
 let png_bytes = nopng::encode_image(&spec, &pixels)?;
+# Ok::<(), nopng::Error>(())
 ```
 
 ### Decode and reformat to RGBA8
 
 ```rust
+let spec = nopng::ImageSpec {
+    width: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
+    height: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
+    pixel_format: nopng::PixelFormat::Rgba8,
+};
+let pixels = vec![255u8; spec.data_len()];
+let png_bytes = nopng::encode_image(&spec, &pixels)?;
+
 let (spec, pixels) = nopng::decode_image(&png_bytes)?;
 let rgba = nopng::reformat_pixels(&spec.pixel_format, &pixels, &nopng::PixelFormat::Rgba8)?;
+# Ok::<(), nopng::Error>(())
 ```
 
 ### Encode an indexed (palette) image
@@ -55,6 +67,7 @@ let spec = nopng::ImageSpec {
 };
 let indices = vec![0, 1, 2, 3]; // one index per pixel
 let png_bytes = nopng::encode_image(&spec, &indices)?;
+# Ok::<(), nopng::Error>(())
 ```
 
 ### Convert pixel data between formats
@@ -68,6 +81,7 @@ let rgba = nopng::reformat_pixels(
     &nopng::PixelFormat::Rgba8,
 )?;
 assert_eq!(rgba, &[255, 0, 0, 255, 0, 255, 0, 255]);
+# Ok::<(), nopng::Error>(())
 ```
 
 Supported Formats
@@ -83,7 +97,52 @@ Supported Formats
 
 Adam7 interlace is supported for both encoding and decoding.
 
+### APNG
+
+An animation is a canvas size, a pixel format, a play count, and a list of
+full-canvas frames. The `acTL`/`fcTL`/`fdAT` bookkeeping (frame rectangles,
+dispose/blend operations, sequence numbers) is handled internally and is
+not exposed.
+
+| Property                    | Decode                         | Encode                          |
+|-----------------------------|--------------------------------|---------------------------------|
+| Pixel format                | always `Rgba16Be` (composited) | any format from the table above |
+| Frame size                  | expanded to the full canvas    | always the full canvas          |
+| Dispose / blend operations  | applied, not exposed           | always `NONE` / `SOURCE`        |
+| Interlace                   | read from the file             | always non-interlaced           |
+
+Decoded frames are composited, so each one is a complete image that can be
+displayed without consulting its neighbours. The output format is always
+`Rgba16Be` — the lossless common denominator for mixing frames — so use
+`reformat_pixels` to narrow it if needed.
+
+### Encode an animation and decode it again
+
+```rust
+let animation = nopng::Animation {
+    width: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
+    height: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
+    pixel_format: nopng::PixelFormat::Rgba8,
+    play_count: nopng::PlayCount::Infinite,
+    frames: vec![nopng::Frame {
+        pixels: vec![255, 0, 0, 255].repeat(4),
+        delay: nopng::Delay {
+            num: 1,
+            den: std::num::NonZeroU16::new(10).expect("10 is non-zero"),
+        },
+    }],
+};
+let bytes = nopng::encode_animation(&animation)?;
+let decoded = nopng::decode_animation(&bytes)?;
+assert_eq!(decoded.frames.len(), 1);
+# Ok::<(), nopng::Error>(())
+```
+
 Limitations
 -----------
 
-- Animated PNG (APNG) is not supported yet
+- APNG encoding cannot emit a sub-rectangle frame or a dispose/blend
+  operation other than `NONE`/`SOURCE`, so an animation encoded by this
+  crate always decodes back to exactly the frames it was given.
+- `reformat_pixels` cannot convert **to** an indexed format; it returns
+  `Error::Unsupported`.
