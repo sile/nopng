@@ -1,5 +1,14 @@
 use std::assert_matches;
 
+/// Builds an [`nopng::ImageSpec`] from literal dimensions.
+fn image_spec(width: u32, height: u32, pixel_format: nopng::PixelFormat) -> nopng::ImageSpec {
+    nopng::ImageSpec {
+        width: core::num::NonZeroU32::new(width).expect("test dimensions are non-zero"),
+        height: core::num::NonZeroU32::new(height).expect("test dimensions are non-zero"),
+        pixel_format,
+    }
+}
+
 fn rgba8(bytes: &[u8]) -> Vec<u8> {
     let (spec, data) = nopng::decode_image(bytes).expect("infallible");
     assert_eq!(data.len(), spec.data_len());
@@ -11,8 +20,8 @@ fn rgba8(bytes: &[u8]) -> Vec<u8> {
 fn decodes_grayscale_png() {
     let (spec, _) =
         nopng::decode_image(include_bytes!("data/gray_filters.png")).expect("infallible");
-    assert_eq!(spec.width, 3);
-    assert_eq!(spec.height, 2);
+    assert_eq!(spec.width.get(), 3);
+    assert_eq!(spec.height.get(), 2);
     assert_eq!(
         rgba8(include_bytes!("data/gray_filters.png")),
         &[
@@ -26,21 +35,20 @@ fn decodes_grayscale_png() {
 fn reads_image_spec_from_ihdr() {
     let spec =
         nopng::inspect_image(include_bytes!("data/gray16_interlaced.png")).expect("infallible");
-    assert_eq!(spec.width, 5);
-    assert_eq!(spec.height, 4);
+    assert_eq!(spec.width.get(), 5);
+    assert_eq!(spec.height.get(), 4);
     assert_matches!(
         spec.pixel_format,
         nopng::PixelFormat::Gray16Be | nopng::PixelFormat::GrayAlpha16Be
     );
-    assert!(spec.interlaced);
 }
 
 #[test]
 fn decodes_grayscale_alpha_png() {
     let (spec, _) =
         nopng::decode_image(include_bytes!("data/gray_alpha_avg.png")).expect("infallible");
-    assert_eq!(spec.width, 2);
-    assert_eq!(spec.height, 2);
+    assert_eq!(spec.width.get(), 2);
+    assert_eq!(spec.height.get(), 2);
     assert_eq!(
         rgba8(include_bytes!("data/gray_alpha_avg.png")),
         &[
@@ -52,8 +60,8 @@ fn decodes_grayscale_alpha_png() {
 #[test]
 fn decodes_rgb_png() {
     let (spec, _) = nopng::decode_image(include_bytes!("data/rgb_sub_up.png")).expect("infallible");
-    assert_eq!(spec.width, 2);
-    assert_eq!(spec.height, 2);
+    assert_eq!(spec.width.get(), 2);
+    assert_eq!(spec.height.get(), 2);
     assert_eq!(
         rgba8(include_bytes!("data/rgb_sub_up.png")),
         &[
@@ -66,8 +74,8 @@ fn decodes_rgb_png() {
 fn decodes_rgba_png_with_split_idat() {
     let (spec, _) =
         nopng::decode_image(include_bytes!("data/rgba_paeth_split_idat.png")).expect("infallible");
-    assert_eq!(spec.width, 2);
-    assert_eq!(spec.height, 2);
+    assert_eq!(spec.width.get(), 2);
+    assert_eq!(spec.height.get(), 2);
     assert_eq!(
         rgba8(include_bytes!("data/rgba_paeth_split_idat.png")),
         &[
@@ -80,8 +88,8 @@ fn decodes_rgba_png_with_split_idat() {
 fn decodes_1bit_grayscale_png() {
     let (spec, _) =
         nopng::decode_image(include_bytes!("data/gray_1bit_filters.png")).expect("infallible");
-    assert_eq!(spec.width, 5);
-    assert_eq!(spec.height, 2);
+    assert_eq!(spec.width.get(), 5);
+    assert_eq!(spec.height.get(), 2);
     assert_matches!(spec.pixel_format, nopng::PixelFormat::Gray1);
     assert_eq!(
         rgba8(include_bytes!("data/gray_1bit_filters.png")),
@@ -117,8 +125,8 @@ fn decodes_4bit_palette_with_trns() {
 #[test]
 fn decodes_16bit_rgba() {
     let (spec, _) = nopng::decode_image(include_bytes!("data/rgba16.png")).expect("infallible");
-    assert_eq!(spec.width, 2);
-    assert_eq!(spec.height, 1);
+    assert_eq!(spec.width.get(), 2);
+    assert_eq!(spec.height.get(), 1);
     assert_eq!(
         rgba8(include_bytes!("data/rgba16.png")),
         &[255, 128, 0, 255, 18, 171, 255, 1,]
@@ -129,12 +137,7 @@ fn decodes_16bit_rgba() {
 fn decodes_rgba_interlaced() {
     let rgba = rgba8(include_bytes!("data/rgba_interlaced.png"));
     // Re-encode as non-interlaced and verify roundtrip.
-    let spec2 = nopng::ImageSpec {
-        width: 4,
-        height: 4,
-        pixel_format: nopng::PixelFormat::Rgba8,
-        interlaced: false,
-    };
+    let spec2 = image_spec(4, 4, nopng::PixelFormat::Rgba8);
     let bytes = nopng::encode_image(&spec2, &rgba).expect("infallible");
     assert_eq!(rgba8(&bytes), rgba);
 }
@@ -143,8 +146,6 @@ fn decodes_rgba_interlaced() {
 fn decodes_palette_interlaced() {
     let (spec, _) =
         nopng::decode_image(include_bytes!("data/palette_interlaced.png")).expect("infallible");
-    assert!(spec.width > 0);
-    assert!(spec.height > 0);
     assert_matches!(
         spec.pixel_format,
         nopng::PixelFormat::Indexed1 { .. }
@@ -161,8 +162,8 @@ fn decodes_palette_interlaced() {
 fn decodes_gray16_interlaced() {
     let (spec, _) =
         nopng::decode_image(include_bytes!("data/gray16_interlaced.png")).expect("infallible");
-    assert_eq!(spec.width, 5);
-    assert_eq!(spec.height, 4);
+    assert_eq!(spec.width.get(), 5);
+    assert_eq!(spec.height.get(), 4);
     assert_matches!(
         spec.pixel_format,
         nopng::PixelFormat::Gray16Be | nopng::PixelFormat::GrayAlpha16Be
@@ -179,34 +180,28 @@ fn decodes_interlaced_low_bit_images_with_empty_passes() {
     // `chunks_exact(0)` for those passes and panic with "chunk size must
     // be non-zero"; they must instead decode cleanly.
     for (width, height) in [(1, 1), (1, 8), (8, 1), (2, 2), (3, 3)] {
-        let gray = nopng::ImageSpec {
-            width,
-            height,
-            pixel_format: nopng::PixelFormat::Gray2,
-            interlaced: true,
-        };
+        let gray = image_spec(width, height, nopng::PixelFormat::Gray2);
         let samples: Vec<u8> = (0..width * height).map(|i| (i % 4) as u8).collect();
-        let encoded = nopng::encode_image(&gray, &samples).expect("infallible");
+        let encoded = nopng::encode_image_interlaced(&gray, &samples).expect("infallible");
         let (decoded_spec, decoded) = nopng::decode_image(&encoded).expect("infallible");
-        assert!(decoded_spec.interlaced);
+        assert_eq!(decoded_spec.width, gray.width);
         assert_eq!(
             decoded, samples,
             "gray2 interlace mismatch for {width}x{height}"
         );
 
-        let indexed = nopng::ImageSpec {
+        let indexed = image_spec(
             width,
             height,
-            pixel_format: nopng::PixelFormat::Indexed4 {
+            nopng::PixelFormat::Indexed4 {
                 palette: vec![255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0],
                 trns: None,
             },
-            interlaced: true,
-        };
+        );
         let indices: Vec<u8> = (0..width * height).map(|i| (i % 4) as u8).collect();
-        let encoded = nopng::encode_image(&indexed, &indices).expect("infallible");
+        let encoded = nopng::encode_image_interlaced(&indexed, &indices).expect("infallible");
         let (decoded_spec, decoded) = nopng::decode_image(&encoded).expect("infallible");
-        assert!(decoded_spec.interlaced);
+        assert_eq!(decoded_spec.width, indexed.width);
         assert_eq!(
             decoded, indices,
             "indexed4 interlace mismatch for {width}x{height}"

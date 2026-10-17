@@ -81,10 +81,10 @@ impl PlayCount {
 /// All frames are expected to share one `pixel_format`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Animation {
-    /// Width in pixels. Every frame is this wide.
-    pub width: u32,
-    /// Height in pixels. Every frame is this tall.
-    pub height: u32,
+    /// Width in pixels. Every frame is this wide. Never zero.
+    pub width: NonZeroU32,
+    /// Height in pixels. Every frame is this tall. Never zero.
+    pub height: NonZeroU32,
     /// Pixel format shared by every frame's buffer.
     pub pixel_format: PixelFormat,
     /// How many times the animation should play.
@@ -102,8 +102,8 @@ pub struct Animation {
 /// # Errors
 ///
 /// Returns [`Error::InvalidData`](crate::Error::InvalidData) if `animation` has
-/// no frames, if its width or height is zero, or if a frame's pixel buffer is
-/// not the length [`PixelFormat::data_len`] prescribes for the canvas.
+/// no frames, or if a frame's pixel buffer is not the length
+/// [`PixelFormat::data_len`] prescribes for the canvas.
 pub fn encode_animation(animation: &Animation) -> Result<Vec<u8>> {
     crate::apng_encode::encode_animation(animation)
 }
@@ -132,8 +132,8 @@ pub fn encode_animation(animation: &Animation) -> Result<Vec<u8>> {
 ///
 /// ```
 /// let animation = nopng::Animation {
-///     width: 2,
-///     height: 2,
+///     width: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
+///     height: std::num::NonZeroU32::new(2).expect("2 is non-zero"),
 ///     pixel_format: nopng::PixelFormat::Rgba8,
 ///     play_count: nopng::PlayCount::Infinite,
 ///     frames: vec![
@@ -174,12 +174,21 @@ pub fn decode_animation(bytes: &[u8]) -> Result<Animation> {
     }
 
     Ok(Animation {
-        width: composited.width,
-        height: composited.height,
+        width: non_zero_dimension(composited.width),
+        height: non_zero_dimension(composited.height),
         pixel_format: PixelFormat::Rgba16Be,
         play_count: play_count_from_u32(composited.num_plays),
         frames,
     })
+}
+
+/// Narrows a decoded APNG dimension to [`NonZeroU32`].
+///
+/// The APNG walker and compositor work in plain `u32`, but `IHDR` and `fcTL`
+/// dimensions are already required to be non-zero there, so this conversion
+/// cannot fail on a decoded animation.
+fn non_zero_dimension(value: u32) -> NonZeroU32 {
+    NonZeroU32::new(value).expect("bug: apng_decode accepted a zero dimension")
 }
 
 /// APNG treats a `delay_den` of `0` as `100`; the type forbids zero, so the
